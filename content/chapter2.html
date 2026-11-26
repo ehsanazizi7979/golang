@@ -1,0 +1,768 @@
+<h2 class="sec" id="ch2" style="margin-top:0">Chapter 2 — Foundations</h2>
+<h3>“Alright, let’s get started!”</h3>
+<p class="lead">Chapter 2 builds the entire skeleton of Snippetbox in nine sections. By the end of page 61 the
+  application has a project layout that scales, a servemux with three routes, method-restricted handlers with
+  custom headers, validated query strings, an inherited HTML template set, a static file server and a
+  working understanding of the <code>http.Handler</code> interface.</p>
+
+<p>It opens by listing exactly that:</p>
+<ul class="chips">
+  <li>Set up a project directory following Go conventions</li>
+  <li>Start a web server and listen for requests</li>
+  <li>Route requests by path</li>
+  <li>Send different responses, headers and status codes</li>
+  <li>Fetch and validate untrusted query-string input</li>
+  <li>Structure the project sensibly</li>
+  <li>Render HTML with template inheritance</li>
+  <li>Serve static files</li>
+</ul>
+
+<h2 class="sec" id="s21">2.1 · Project setup and creating a module</h2>
+<p>Everything lives in a <code>snippetbox</code> directory in <code>$HOME/code</code>. The next decision is the
+  <strong>module path</strong> — a canonical, globally unique identifier for the project. The convention is to base
+  it on a URL you own; the book uses <code>snippetbox.alexedwards.net</code>.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ mkdir -p $HOME/code/snippetbox</span>
+<span class="prompt">$ cd $HOME/code/snippetbox</span>
+<span class="prompt">$ go mod init snippetbox.alexedwards.net</span>
+<span class="out">go: creating new go.mod: module snippetbox.alexedwards.net</span></pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-01}}" alt="A file manager showing the snippetbox directory containing only a go.mod file.">
+  <figcaption><b>Figure 2.1</b> — after <code>go mod init</code>: an empty project plus <code>go.mod</code>.
+    That file alone is what makes the directory a Go module.</figcaption>
+</figure>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: go.mod</span><span class="lang">go.mod</span></div>
+  <pre class="code">module snippetbox.alexedwards.net
+
+go 1.20</pre>
+</div>
+
+<p>Modules make third-party dependencies manageable, help avoid supply-chain attacks and give reproducible
+  builds. To prove the toolchain works, the book adds the traditional first program and runs it with
+  <code>go run .</code>, which compiles to a binary in <code>/tmp</code> and executes it in one step.
+  (<code>go run .</code>, <code>go run main.go</code> and <code>go run snippetbox.alexedwards.net</code> are all
+  equivalent here.)</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> <span class="str">"fmt"</span>
+
+<span class="kw">func</span> main() {
+    fmt.Println(<span class="str">"Hello world!"</span>)
+}</pre>
+</div>
+
+<p class="note"><b>Additional information.</b> If your project can be downloaded by other people, the module path
+  should equal the URL it is downloaded from — a package hosted at <code>https://github.com/foo/bar</code> gets the
+  module path <code>github.com/foo/bar</code>.</p>
+
+<h2 class="sec" id="s22">2.2 · Web application basics</h2>
+<p>Three components make a web application: a <strong>handler</strong> (think: controller — runs logic and writes
+  headers and a body), a <strong>router</strong> (Go calls it a <em>servemux</em>; it maps URL patterns to
+  handlers) and a <strong>web server</strong>. In Go the server is part of your program — no Nginx or Apache
+  required.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"log"</span>
+    <span class="str">"net/http"</span>
+)
+
+<span class="com">// Define a home handler function which writes a byte slice containing</span>
+<span class="com">// "Hello from Snippetbox" as the response body.</span>
+<span class="kw">func</span> home(w http.ResponseWriter, r *http.Request) {
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Hello from Snippetbox"</span>))
+}
+
+<span class="kw">func</span> main() {
+    <span class="com">// Use the http.NewServeMux() function to initialize a new servemux, then</span>
+    <span class="com">// register the home function as the handler for the "/" URL pattern.</span>
+    mux := http.NewServeMux()
+    mux.HandleFunc(<span class="str">"/"</span>, home)
+
+    <span class="com">// Use the http.ListenAndServe() function to start a new web server. We pass in</span>
+    <span class="com">// two parameters: the TCP network address to listen on (in this case ":4000")</span>
+    <span class="com">// and the servemux we just created. If http.ListenAndServe() returns an error</span>
+    <span class="com">// we use the log.Fatal() function to log the error message and exit. Note</span>
+    <span class="com">// that any error returned by http.ListenAndServe() is always non-nil.</span>
+    log.Print(<span class="str">"Starting server on :4000"</span>)
+    err := http.ListenAndServe(<span class="str">":4000"</span>, mux)
+    log.Fatal(err)
+}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-02}}" alt="A browser at localhost:4000 showing the text Hello from Snippetbox.">
+  <figcaption><b>Figure 2.2</b> — the first working response. The handler is an ordinary Go function taking an
+    <code>http.ResponseWriter</code> (to build the response) and a <code>*http.Request</code> (holding the method,
+    URL and more).</figcaption>
+</figure>
+
+<p class="note"><b>Important.</b> Go’s servemux treats the pattern <code>"/"</code> as a catch-all, so
+  <code>/foo</code> returns the same page. Stop the server with <kbd>Ctrl+c</kbd>. The address format for
+  <code>http.ListenAndServe()</code> is <code>"host:port"</code>; omitting the host listens on every interface.</p>
+
+<h2 class="sec" id="s23">2.3 · Routing requests</h2>
+<p>One route is not much of an app, so two more are registered — the table the book has just introduced:</p>
+
+<table>
+  <thead><tr><th>URL pattern</th><th>Handler</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td><code>/</code></td><td><code>home</code></td><td>Display the home page</td></tr>
+    <tr><td><code>/snippet/view</code></td><td><code>snippetView</code></td><td>Display a specific snippet</td></tr>
+    <tr><td><code>/snippet/create</code></td><td><code>snippetCreate</code></td><td>Create a new snippet</td></tr>
+  </tbody>
+</table>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Add a snippetView handler function.</span>
+<span class="kw">func</span> snippetView(w http.ResponseWriter, r *http.Request) {
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Display a specific snippet..."</span>))
+}
+
+<span class="com">// Add a snippetCreate handler function.</span>
+<span class="kw">func</span> snippetCreate(w http.ResponseWriter, r *http.Request) {
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Create a new snippet..."</span>))
+}
+
+<span class="kw">func</span> main() {
+    mux := http.NewServeMux()
+    mux.HandleFunc(<span class="str">"/"</span>, home)
+    mux.HandleFunc(<span class="str">"/snippet/view"</span>, snippetView)
+    mux.HandleFunc(<span class="str">"/snippet/create"</span>, snippetCreate)
+
+    log.Print(<span class="str">"Starting server on :4000"</span>)
+    err := http.ListenAndServe(<span class="str">":4000"</span>, mux)
+    log.Fatal(err)
+}</pre>
+</div>
+
+<div class="figrow">
+  <figure class="shot">
+    <img src="{{IMG:ch2-03}}" alt="Browser at localhost:4000/snippet/view showing Display a specific snippet...">
+    <figcaption><b>Figure 2.3a</b> — <code>/snippet/view</code></figcaption>
+  </figure>
+  <figure class="shot">
+    <img src="{{IMG:ch2-04}}" alt="Browser at localhost:4000/snippet/create showing Create a new snippet...">
+    <figcaption><b>Figure 2.3b</b> — <code>/snippet/create</code></figcaption>
+  </figure>
+</div>
+
+<h3 style="font-size:21px;margin-top:30px">Fixed paths vs. subtree paths</h3>
+<p>Patterns without a trailing slash are <strong>fixed paths</strong> — matched only on an exact URL match.
+  Patterns <em>with</em> a trailing slash are <strong>subtree paths</strong> — matched when the start of the URL
+  matches, as if a wildcard sat at the end (<code>"/**"</code>, <code>"/static/**"</code>). That is precisely why
+  <code>"/"</code> behaves as a catch-all: it means “one slash, then anything or nothing”.</p>
+<p>Go won’t let you change that behaviour, so the fix lives in the handler: check <code>r.URL.Path</code> and
+  return <code>http.NotFound()</code> before writing anything.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> home(w http.ResponseWriter, r *http.Request) {
+    <span class="com">// Check if the current request URL path exactly matches "/". If it doesn't, use</span>
+    <span class="com">// the http.NotFound() function to send a 404 response to the client.</span>
+    <span class="com">// Importantly, we then return from the handler. If we don't return the handler</span>
+    <span class="com">// would keep executing and also write the "Hello from SnippetBox" message.</span>
+    <span class="kw">if</span> r.URL.Path != <span class="str">"/"</span> {
+        http.NotFound(w, r)
+        <span class="kw">return</span>
+    }
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Hello from Snippetbox"</span>))
+}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-05}}" alt="Browser at localhost:4000/missing showing 404 page not found.">
+  <figcaption><b>Figure 2.4</b> — <code>/missing</code> now gets a real 404 instead of the catch-all page.</figcaption>
+</figure>
+
+<h3 style="font-size:21px;margin-top:30px">The DefaultServeMux</h3>
+<p><code>http.HandleFunc()</code> registers routes without an explicit servemux, using a package-level global:</p>
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>From the Go source</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">var</span> DefaultServeMux = NewServeMux()</pre>
+</div>
+<p>The book advises against it for production: because it is global, any imported third-party package can register
+  a route on it — and a compromised dependency could expose a malicious handler. Use a locally scoped servemux.</p>
+
+<p class="note"><b>Additional information.</b> Longer patterns always win, so registration order is irrelevant.
+  Paths are sanitised (<code>/foo/bar/..//baz</code> → 301 to <code>/foo/baz</code>). A request for a registered
+  subtree path without its trailing slash gets a 301 with the slash added. Patterns may include host names
+  (<code>"foo.example.org/"</code>), which are checked before non-host patterns. And the servemux is deliberately
+  lightweight: no method-based routing, no variables in URLs, no regexp — third-party routers cover those.</p>
+
+<h2 class="sec" id="s24">2.4 · Customizing HTTP headers</h2>
+<p><code>/snippet/create</code> becomes a POST-only route. Later it will write to a database — a non-idempotent
+  action — so HTTP good practice says restrict it now.</p>
+
+<table>
+  <thead><tr><th>Method</th><th>Pattern</th><th>Handler</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>ANY</td><td><code>/</code></td><td><code>home</code></td><td>Display the home page</td></tr>
+    <tr><td>ANY</td><td><code>/snippet/view</code></td><td><code>snippetView</code></td><td>Display a specific snippet</td></tr>
+    <tr><td><strong>POST</strong></td><td><code>/snippet/create</code></td><td><code>snippetCreate</code></td><td>Create a new snippet</td></tr>
+  </tbody>
+</table>
+
+<p>The first version sends the status code explicitly. Two nuances matter: <code>w.WriteHeader()</code> can only be
+  called once, and if you don’t call it at all the first <code>w.Write()</code> sends <code>200 OK</code>
+  automatically — so a non-200 status must be written <em>before</em> any body.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: main.go — first attempt</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> snippetCreate(w http.ResponseWriter, r *http.Request) {
+    <span class="kw">if</span> r.Method != <span class="str">"POST"</span> {
+        w.WriteHeader(405)
+        w.Write([]<span class="kw">byte</span>(<span class="str">"Method Not Allowed"</span>))
+        <span class="kw">return</span>
+    }
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Create a new snippet..."</span>))
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — before and after</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl -i -X POST http://localhost:4000/snippet/create</span>
+<span class="out">HTTP/1.1 200 OK
+Date: Sat, 29 Jan 2022 10:27:14 GMT
+Content-Length: 23
+Content-Type: text/plain; charset=utf-8
+
+Create a new snippet...</span>
+
+<span class="prompt">$ curl -i -X PUT http://localhost:4000/snippet/create</span>
+<span class="out">HTTP/1.1 405 Method Not Allowed
+Date: Sat, 29 Jan 2022 10:27:55 GMT
+Content-Length: 18
+Content-Type: text/plain; charset=utf-8
+
+Method Not Allowed</span></pre>
+</div>
+
+<p>Then the <code>Allow</code> header is added — a hint to clients about which methods the URL supports — followed by
+  the <code>http.Error()</code> shortcut, which sets the status and body for us, and finally the
+  <code>net/http</code> constants, which remove the typos waiting inside <code>"POST"</code> and <code>405</code>.
+  That last version is the finished handler:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: main.go — final version</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> snippetCreate(w http.ResponseWriter, r *http.Request) {
+    <span class="kw">if</span> r.Method != http.MethodPost {
+        w.Header().Set(<span class="str">"Allow"</span>, http.MethodPost)
+        http.Error(w, <span class="str">"Method Not Allowed"</span>, http.StatusMethodNotAllowed)
+        <span class="kw">return</span>
+    }
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Create a new snippet..."</span>))
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — with the Allow header</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl -i -X PUT http://localhost:4000/snippet/create</span>
+<span class="out">HTTP/1.1 405 Method Not Allowed
+</span><span class="prompt">Allow: POST</span>
+<span class="out">Date: Sat, 29 Jan 2022 10:29:12 GMT
+Content-Length: 18
+Content-Type: text/plain; charset=utf-8
+
+Method Not Allowed</span></pre>
+</div>
+
+<p class="note"><b>Important.</b> Changing the header map after <code>WriteHeader()</code> or <code>Write()</code>
+  has no effect — all headers must be set first.</p>
+
+<p><strong>Header mechanics from the additional information.</strong> Go sets <code>Date</code>,
+  <code>Content-Length</code> and <code>Content-Type</code> itself; the content type comes from
+  <code>http.DetectContentType()</code>, which cannot tell JSON from plain text, so JSON needs an explicit
+  <code>w.Header().Set("Content-Type", "application/json")</code>. The map supports
+  <code>Set</code>/<code>Add</code>/<code>Del</code>/<code>Get</code>/<code>Values</code>; names are canonicalised
+  (case-insensitive) unless you write to the underlying <code>map[string][]string</code> directly — which is also
+  the only way to suppress a system header, by setting it to <code>nil</code>.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Header map operations</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Set a new cache-control header. If an existing "Cache-Control" header exists</span>
+<span class="com">// it will be overwritten.</span>
+w.Header().Set(<span class="str">"Cache-Control"</span>, <span class="str">"public, max-age=31536000"</span>)
+
+<span class="com">// In contrast, the Add() method appends a new "Cache-Control" header and can</span>
+<span class="com">// be called multiple times.</span>
+w.Header().Add(<span class="str">"Cache-Control"</span>, <span class="str">"public"</span>)
+w.Header().Add(<span class="str">"Cache-Control"</span>, <span class="str">"max-age=31536000"</span>)
+
+<span class="com">// Delete all values for the "Cache-Control" header.</span>
+w.Header().Del(<span class="str">"Cache-Control"</span>)
+
+<span class="com">// Retrieve the first value for the "Cache-Control" header.</span>
+w.Header().Get(<span class="str">"Cache-Control"</span>)
+
+<span class="com">// Retrieve a slice of all values for the "Cache-Control" header.</span>
+w.Header().Values(<span class="str">"Cache-Control"</span>)
+
+<span class="com">// Suppress a system-generated header.</span>
+w.Header()[<span class="str">"Date"</span>] = <span class="kw">nil</span></pre>
+</div>
+
+<h2 class="sec" id="s25">2.5 · URL query strings</h2>
+<p><code>snippetView</code> learns to accept <code>?id=1</code>. The value is untrusted user input, so it is
+  converted with <code>strconv.Atoi()</code> and validated to be a positive integer; anything else gets a 404.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">import</span> (
+    <span class="str">"fmt"</span> <span class="com">// New import</span>
+    <span class="str">"log"</span>
+    <span class="str">"net/http"</span>
+    <span class="str">"strconv"</span> <span class="com">// New import</span>
+)
+
+<span class="kw">func</span> snippetView(w http.ResponseWriter, r *http.Request) {
+    <span class="com">// Extract the value of the id parameter from the query string and try to</span>
+    <span class="com">// convert it to an integer using the strconv.Atoi() function. If it can't</span>
+    <span class="com">// be converted to an integer, or the value is less than 1, we return a 404 page</span>
+    <span class="com">// not found response.</span>
+    id, err := strconv.Atoi(r.URL.Query().Get(<span class="str">"id"</span>))
+    <span class="kw">if</span> err != <span class="kw">nil</span> || id &lt; 1 {
+        http.NotFound(w, r)
+        <span class="kw">return</span>
+    }
+
+    <span class="com">// Use the fmt.Fprintf() function to interpolate the id value with our response</span>
+    <span class="com">// and write it to the http.ResponseWriter.</span>
+    fmt.Fprintf(w, <span class="str">"Display a specific snippet with ID %d..."</span>, id)
+}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-06}}" alt="Browser at localhost:4000/snippet/view?id=123 showing Display a specific snippet with ID 123...">
+  <figcaption><b>Figure 2.5</b> — <code>?id=123</code>. Omitting the parameter, or passing <code>-1</code> or
+    <code>foo</code>, returns <em>404 page not found</em>.</figcaption>
+</figure>
+
+<p><strong>Why <code>fmt.Fprintf(w, …)</code> compiles.</strong> It wants an <code>io.Writer</code>…</p>
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>io.Writer</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> Fprintf(w io.Writer, format <span class="kw">string</span>, a ...any) (n <span class="kw">int</span>, err <span class="kw">error</span>)</pre>
+</div>
+<p>…yet an <code>http.ResponseWriter</code> is accepted, because it satisfies the interface by having a
+  <code>Write()</code> method. In practice: anywhere you see an <code>io.Writer</code>, you can pass the response
+  writer, and whatever is written becomes the response body.</p>
+
+<h2 class="sec" id="s26">2.6 · Project structure and organization</h2>
+<p>There is no single correct layout for Go web apps. The advice: don’t over-complicate; add structure only when it
+  is demonstrably needed. This project follows a widely used outline.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ cd $HOME/code/snippetbox</span>
+<span class="prompt">$ rm main.go</span>
+<span class="prompt">$ mkdir -p cmd/web internal ui/html ui/static</span>
+<span class="prompt">$ touch cmd/web/main.go</span>
+<span class="prompt">$ touch cmd/web/handlers.go</span></pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-07}}" alt="A file manager showing snippetbox containing cmd/web, internal, ui/html, ui/static and go.mod.">
+  <figcaption><b>Figure 2.6</b> — the outline: <code>cmd</code> for executables, <code>internal</code> for reusable
+    non-application code, <code>ui</code> for HTML templates and static assets, <code>go.mod</code> at the root.</figcaption>
+</figure>
+
+<p>Two benefits: Go and non-Go assets are cleanly separated (the root stays free for UI files, makefiles and module
+  definitions), and the layout scales — a future CLI would sit at <code>cmd/cli</code> and import everything under
+  <code>internal</code>. Note that <code>internal</code> is special in Go: packages beneath it can only be imported
+  by code inside the parent of <code>internal</code> — that is, only by this project.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"fmt"</span>
+    <span class="str">"net/http"</span>
+    <span class="str">"strconv"</span>
+)
+
+<span class="kw">func</span> home(w http.ResponseWriter, r *http.Request) {
+    <span class="kw">if</span> r.URL.Path != <span class="str">"/"</span> {
+        http.NotFound(w, r)
+        <span class="kw">return</span>
+    }
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Hello from Snippetbox"</span>))
+}
+
+<span class="kw">func</span> snippetView(w http.ResponseWriter, r *http.Request) {
+    id, err := strconv.Atoi(r.URL.Query().Get(<span class="str">"id"</span>))
+    <span class="kw">if</span> err != <span class="kw">nil</span> || id &lt; 1 {
+        http.NotFound(w, r)
+        <span class="kw">return</span>
+    }
+    fmt.Fprintf(w, <span class="str">"Display a specific snippet with ID %d..."</span>, id)
+}
+
+<span class="kw">func</span> snippetCreate(w http.ResponseWriter, r *http.Request) {
+    <span class="kw">if</span> r.Method != http.MethodPost {
+        w.Header().Set(<span class="str">"Allow"</span>, http.MethodPost)
+        http.Error(w, <span class="str">"Method Not Allowed"</span>, http.StatusMethodNotAllowed)
+        <span class="kw">return</span>
+    }
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Create a new snippet..."</span>))
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go run ./cmd/web</span>
+<span class="out">2022/01/29 12:02:26 Starting server on :4000</span></pre>
+</div>
+
+<h2 class="sec" id="s27">2.7 · HTML templating and inheritance</h2>
+<p>Time for a real home page. Over the next chapters it becomes the page sketched below; first comes a template at
+  <code>ui/html/pages/home.tmpl</code> and a handler that parses and executes it with
+  <code>html/template</code> — the package that parses and renders templates <em>safely</em>.</p>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-08}}" alt="A wireframe sketch of the Snippetbox home page: header with SNIPPETBOX, a HOME nav item, Latest Snippets heading, placeholder text and a footer.">
+  <figcaption><b>Figure 2.7</b> — the target home page: header, navigation, content area, footer.</figcaption>
+</figure>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/home.tmpl — first version</span><span class="lang">html</span></div>
+  <pre class="code">&lt;!doctype html&gt;
+&lt;html lang='en'&gt;
+    &lt;head&gt;
+        &lt;meta charset='utf-8'&gt;
+        &lt;title&gt;Home - Snippetbox&lt;/title&gt;
+    &lt;/head&gt;
+    &lt;body&gt;
+        &lt;header&gt;
+            &lt;h1&gt;&lt;a href='/'&gt;Snippetbox&lt;/a&gt;&lt;/h1&gt;
+        &lt;/header&gt;
+        &lt;main&gt;
+            &lt;h2&gt;Latest Snippets&lt;/h2&gt;
+            &lt;p&gt;There's nothing to see here yet!&lt;/p&gt;
+        &lt;/main&gt;
+        &lt;footer&gt;Powered by &lt;a href='https://golang.org/'&gt;Go&lt;/a&gt;&lt;/footer&gt;
+    &lt;/body&gt;
+&lt;/html&gt;</pre>
+</div>
+
+<p class="note"><b>Note.</b> <code>.tmpl</code> means nothing to Go — it just makes template files recognisable.
+  <code>.html</code> or <code>.tmpl.html</code> work too, the latter helping editors with syntax highlighting.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — rendering it</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> home(w http.ResponseWriter, r *http.Request) {
+    <span class="kw">if</span> r.URL.Path != <span class="str">"/"</span> {
+        http.NotFound(w, r)
+        <span class="kw">return</span>
+    }
+
+    <span class="com">// Use the template.ParseFiles() function to read the template file into a</span>
+    <span class="com">// template set. If there's an error, we log the detailed error message and use</span>
+    <span class="com">// the http.Error() function to send a generic 500 Internal Server Error</span>
+    <span class="com">// response to the user.</span>
+    ts, err := template.ParseFiles(<span class="str">"./ui/html/pages/home.tmpl"</span>)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        log.Print(err.Error())
+        http.Error(w, <span class="str">"Internal Server Error"</span>, 500)
+        <span class="kw">return</span>
+    }
+
+    <span class="com">// We then use the Execute() method on the template set to write the</span>
+    <span class="com">// template content as the response body. The last parameter to Execute()</span>
+    <span class="com">// represents any dynamic data that we want to pass in, which for now we'll</span>
+    <span class="com">// leave as nil.</span>
+    err = ts.Execute(w, <span class="kw">nil</span>)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        log.Print(err.Error())
+        http.Error(w, <span class="str">"Internal Server Error"</span>, 500)
+    }
+}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-09}}" alt="The unstyled home page at localhost:4000 showing Snippetbox, Latest Snippets, There's nothing to see here yet, and Powered by Go.">
+  <figcaption><b>Figure 2.8</b> — the template rendered. Unstyled, because the CSS has not been added yet.</figcaption>
+</figure>
+
+<h3 style="font-size:21px;margin-top:30px">Template composition</h3>
+<p>Every page will share a header, nav and metadata, so that boilerplate moves into a base template with holes in it.
+  <code>{{define "base"}}</code> defines a named template; <code>{{template "title" .}}</code> and
+  <code>{{template "main" .}}</code> invoke other named templates (the dot is the data passed to them).</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/base.tmpl</span><span class="lang">go template</span></div>
+  <pre class="code">{{define "base"}}
+&lt;!doctype html&gt;
+&lt;html lang='en'&gt;
+    &lt;head&gt;
+        &lt;meta charset='utf-8'&gt;
+        &lt;title&gt;{{template "title" .}} - Snippetbox&lt;/title&gt;
+    &lt;/head&gt;
+    &lt;body&gt;
+        &lt;header&gt;
+            &lt;h1&gt;&lt;a href='/'&gt;Snippetbox&lt;/a&gt;&lt;/h1&gt;
+        &lt;/header&gt;
+        &lt;main&gt;
+            {{template "main" .}}
+        &lt;/main&gt;
+        &lt;footer&gt;Powered by &lt;a href='https://golang.org/'&gt;Go&lt;/a&gt;&lt;/footer&gt;
+    &lt;/body&gt;
+&lt;/html&gt;
+{{end}}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/home.tmpl — defines the holes</span><span class="lang">go template</span></div>
+  <pre class="code">{{define "title"}}Home{{end}}
+
+{{define "main"}}
+    &lt;h2&gt;Latest Snippets&lt;/h2&gt;
+    &lt;p&gt;There's nothing to see here yet!&lt;/p&gt;
+{{end}}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — parse both, execute "base"</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Initialize a slice containing the paths to the two files. It's important</span>
+<span class="com">// to note that the file containing our base template must be the *first*</span>
+<span class="com">// file in the slice.</span>
+files := []<span class="kw">string</span>{
+    <span class="str">"./ui/html/base.tmpl"</span>,
+    <span class="str">"./ui/html/pages/home.tmpl"</span>,
+}
+
+ts, err := template.ParseFiles(files...)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    log.Print(err.Error())
+    http.Error(w, <span class="str">"Internal Server Error"</span>, 500)
+    <span class="kw">return</span>
+}
+
+<span class="com">// Use the ExecuteTemplate() method to write the content of the "base"</span>
+<span class="com">// template as the response body.</span>
+err = ts.ExecuteTemplate(w, <span class="str">"base"</span>, <span class="kw">nil</span>)</pre>
+</div>
+
+<p>The template set now holds three named templates — <code>base</code>, <code>title</code> and
+  <code>main</code> — and <code>ExecuteTemplate(w, "base", nil)</code> renders the composition.</p>
+
+<h3 style="font-size:21px;margin-top:30px">Embedding partials</h3>
+<p>Reusable fragments go in their own files. The navigation bar becomes
+  <code>ui/html/partials/nav.tmpl</code>, invoked with <code>{{template "nav" .}}</code> from the base template and
+  added to the <code>files</code> slice.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/partials/nav.tmpl</span><span class="lang">go template</span></div>
+  <pre class="code">{{define "nav"}}
+    &lt;nav&gt;
+        &lt;a href='/'&gt;Home&lt;/a&gt;
+    &lt;/nav&gt;
+{{end}}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-10}}" alt="The home page with a Home navigation link between the header and the main content.">
+  <figcaption><b>Figure 2.9</b> — the nav partial in place, still unstyled.</figcaption>
+</figure>
+
+<p class="note"><b>Additional information.</b> <code>{{block "name" .}}…{{end}}</code> works like
+  <code>{{template}}</code> but supplies default content when the invoked template is missing from the set — handy
+  for optional sidebars. With nothing between <code>block</code> and <code>end</code>, the invoked template becomes
+  entirely optional. Go’s <code>embed</code> package can also bake files into the binary instead of reading them from
+  disk; the book returns to that later.</p>
+
+<h2 class="sec" id="s28">2.8 · Serving static files</h2>
+<p>CSS, images and a little JavaScript arrive in <code>ui/static</code>,
+  then <code>http.FileServer</code> serves them. Because the file server strips the leading slash and looks up the
+  remainder inside the given directory, the <code>/static</code> prefix must be removed first —
+  <code>http.StripPrefix()</code> does exactly that.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl https://www.alexedwards.net/static/sb-v2.tar.gz | tar -xvz -C ./ui/static/</span></pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-11}}" alt="A file manager showing ui/static containing css/main.css, img/favicon.ico, img/logo.png and js/main.js.">
+  <figcaption><b>Figure 2.10</b> — the static assets: <code>css/main.css</code>, <code>img/favicon.ico</code>,
+    <code>img/logo.png</code>, <code>js/main.js</code>.</figcaption>
+</figure>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> main() {
+    mux := http.NewServeMux()
+
+    <span class="com">// Create a file server which serves files out of the "./ui/static" directory.</span>
+    <span class="com">// Note that the path given to the http.Dir function is relative to the project</span>
+    <span class="com">// directory root.</span>
+    fileServer := http.FileServer(http.Dir(<span class="str">"./ui/static/"</span>))
+
+    <span class="com">// Use the mux.Handle() function to register the file server as the handler for</span>
+    <span class="com">// all URL paths that start with "/static/". For matching paths, we strip the</span>
+    <span class="com">// "/static" prefix before the request reaches the file server.</span>
+    mux.Handle(<span class="str">"/static/"</span>, http.StripPrefix(<span class="str">"/static"</span>, fileServer))
+
+    <span class="com">// Register the other application routes as normal.</span>
+    mux.HandleFunc(<span class="str">"/"</span>, home)
+    mux.HandleFunc(<span class="str">"/snippet/view"</span>, snippetView)
+    mux.HandleFunc(<span class="str">"/snippet/create"</span>, snippetCreate)
+
+    log.Print(<span class="str">"Starting server on :4000"</span>)
+    err := http.ListenAndServe(<span class="str">":4000"</span>, mux)
+    log.Fatal(err)
+}</pre>
+</div>
+
+<div class="figrow">
+  <figure class="shot">
+    <img src="{{IMG:ch2-12}}" alt="Browser at localhost:4000/static/ showing a directory listing with css/, img/ and js/.">
+    <figcaption><b>Figure 2.11a</b> — <code>/static/</code> lists
+      <code>css/</code>, <code>img/</code>, <code>js/</code></figcaption>
+  </figure>
+  <figure class="shot">
+    <img src="{{IMG:ch2-13}}" alt="Browser at localhost:4000/static/css/main.css showing the stylesheet source.">
+    <figcaption><b>Figure 2.11b</b> — <code>/static/css/main.css</code> served as CSS</figcaption>
+  </figure>
+</div>
+
+<p>Finally the base template links the stylesheet, the favicon, the Ubuntu Mono webfont and the JavaScript file — and
+  the page comes alive:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/base.tmpl — head and body additions</span><span class="lang">go template</span></div>
+  <pre class="code">&lt;!-- Link to the CSS stylesheet and favicon --&gt;
+&lt;link rel='stylesheet' href='/static/css/main.css'&gt;
+&lt;link rel='shortcut icon' href='/static/img/favicon.ico' type='image/x-icon'&gt;
+
+&lt;!-- Also link to some fonts hosted by Google --&gt;
+&lt;link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700'&gt;
+
+...
+
+&lt;!-- And include the JavaScript file --&gt;
+&lt;script src="/static/js/main.js" type="text/javascript"&gt;&lt;/script&gt;</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch2-14}}" alt="The finished styled home page: cube logo and Snippetbox wordmark, Home nav link, Latest Snippets, and Powered by Go footer.">
+  <figcaption><b>Figure 2.12</b> — the styled home page, the destination of section 2.7 reached through 2.8.</figcaption>
+</figure>
+
+<p class="note"><b>Additional information.</b> The file server cleans every path with <code>path.Clean()</code>
+  (blocking directory traversal), supports Range requests — <code>curl -H "Range: bytes=100-199"</code> returns
+  <code>206 Partial Content</code> — handles <code>Last-Modified</code>/<code>If-Modified-Since</code> with
+  <code>304 Not Modified</code>, and sets <code>Content-Type</code> from the extension via
+  <code>mime.TypeByExtension()</code>. Frequently served files are usually read from the OS cache rather than disk.
+  For one-off files use <code>http.ServeFile()</code> — but it does <em>not</em> sanitise paths, so clean untrusted
+  input with <code>filepath.Clean()</code>. To disable directory listings, drop a blank <code>index.html</code> in
+  each directory, or implement a custom <code>http.FileSystem</code> that returns <code>os.ErrNotExist</code> for
+  directories.</p>
+
+<h2 class="sec" id="s29">2.9 · The <code>http.Handler</code> interface</h2>
+<p>Strictly, a handler is any object satisfying this interface:</p>
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>net/http</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">type</span> Handler <span class="kw">interface</span> {
+    ServeHTTP(ResponseWriter, *Request)
+}</pre>
+</div>
+<p>So the minimum handler is any type with a
+  <code>ServeHTTP(http.ResponseWriter, *http.Request)</code> method — a struct, a string, anything:</p>
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>A handler type</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">type</span> home <span class="kw">struct</span>{}
+
+<span class="kw">func</span> (h *home) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    w.Write([]<span class="kw">byte</span>(<span class="str">"This is my home page"</span>))
+}
+
+mux := http.NewServeMux()
+mux.Handle(<span class="str">"/"</span>, &amp;home{})</pre>
+</div>
+<p>Creating an object just to hang a method on is long-winded, which is why handlers are written as plain functions.
+  Such a function is not itself a handler — the <code>http.HandlerFunc()</code> adapter adds the
+  <code>ServeHTTP()</code> method for you:</p>
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Function → handler</span><span class="lang">go</span></div>
+  <pre class="code">mux.Handle(<span class="str">"/"</span>, http.HandlerFunc(home))   <span class="com">// what HandleFunc() does for us</span>
+mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com">// ...so we normally write this</span></pre>
+</div>
+<h3 style="font-size:21px;margin-top:30px">Chaining handlers</h3>
+<p><code>http.ListenAndServe(addr string, handler Handler)</code> wants a <code>Handler</code> — and a servemux
+  qualifies, because it has a <code>ServeHTTP()</code> method too. The servemux is best understood as a special
+  handler that passes the request to a second handler instead of answering itself. A Go web app is a chain of
+  <code>ServeHTTP()</code> calls; middleware later in the book extends the chain.</p>
+<p class="note"><b>Requests are handled concurrently.</b> Every incoming request is served in its own goroutine. That
+  is a large part of why Go servers are fast — and why shared state accessed from handlers needs protecting against
+  race conditions.</p>
+
+<h2 class="sec" id="ch2-demo">Chapter 2, running live</h2>
+<p>This repository’s demo server now carries a faithful copy of the project: the real
+  <code>ui/html/base.tmpl</code>, <code>partials/nav.tmpl</code> and <code>pages/home.tmpl</code> files are parsed and
+  composed, and <code>ui/static</code> is served through a <code>stripPrefix + fileServer</code> equivalent.</p>
+
+<div class="demo">
+  <div class="demo__head">
+    <h3>Snippetbox — chapter 2 routes</h3>
+    <span class="live"><i></i><span id="ch2State">connecting…</span></span>
+    <a class="btn" href="http://localhost:3000/home" target="_blank" rel="noopener" style="margin-left:auto">Open the templated home page ↗</a>
+  </div>
+  <div class="demo__body">
+    <p style="margin:0 0 10px"><strong>Templated home page</strong>
+      <span style="color:#7b8b93;font-size:14px">— <code>base</code> + <code>nav</code> + <code>main</code>, rendered from the real .tmpl files</span></p>
+    <div class="row"><button class="btn btn--green" data-ch2="home">Render /home</button></div>
+    <div class="resp" data-ch2-slot="home" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>Static file server</strong>
+      <span style="color:#7b8b93;font-size:14px">— directory listing, MIME types, 304 and Range support</span></p>
+    <div class="row">
+      <button class="btn" data-ch2="static">GET /static/</button>
+      <button class="btn" data-ch2="css">GET /static/css/main.css</button>
+      <button class="btn" data-ch2="304">If-Modified-Since (304)</button>
+      <button class="btn" data-ch2="range">Range: bytes=0-49 (206)</button>
+      <button class="btn" data-ch2="traversal">Traversal attempt (404)</button>
+    </div>
+    <div class="resp" data-ch2-slot="static" hidden></div>
+  </div>
+  <div class="demo__foot">
+    <span>Routes: <code>/home</code> · <code>/templates</code> · <code>/static/</code> · <code>/book</code></span>
+    <a href="http://localhost:3000/templates" target="_blank" rel="noopener">template source</a>
+    <a href="http://localhost:3000/static/" target="_blank" rel="noopener">static listing</a>
+  </div>
+</div>
+<p style="font-size:14px;color:#7b8b93">The buttons above issue real requests to the running demo. Without the server,
+  everything else on this page — text, figures and code — still works.</p>
+
+<h2 class="sec" id="ch2-takeaways">What chapter 2 leaves you with</h2>
+<table>
+  <thead><tr><th>Concept</th><th>Where it is demonstrated live</th></tr></thead>
+  <tbody>
+    <tr><td>Handlers, servemux, <code>ListenAndServe</code></td><td><code>GET /</code> in the chapter-one console</td></tr>
+    <tr><td>Fixed vs. subtree patterns, 404s</td><td><code>GET /missing</code>, <code>/snippet/view</code> without an id</td></tr>
+    <tr><td>Method restriction + <code>Allow</code> header</td><td><code>PUT /snippet/create</code> → 405</td></tr>
+    <tr><td>Query strings, <code>strconv.Atoi</code> validation</td><td><code>/snippet/view?id=7</code> vs <code>?id=foo</code></td></tr>
+    <tr><td>Module + project layout</td><td><code>web/snippetbox/</code> in this repository</td></tr>
+    <tr><td>Template inheritance and partials</td><td><code>GET /home</code>, <code>GET /templates</code></td></tr>
+    <tr><td><code>http.FileServer</code> + <code>StripPrefix</code></td><td><code>GET /static/</code>, 301s, 304s, 206s</td></tr>
+    <tr><td><code>http.Handler</code>, <code>HandlerFunc</code>, chaining</td><td>why <code>ListenAndServe</code> accepts the mux at all</td></tr>
+  </tbody>
+</table>
+<p>Chapter 3, <em>Configuration and error handling</em>, starts on page 62 — and immediately refactors everything
+  above into a proper <code>application</code> struct with injected dependencies, leveled logging and centralised
+  error handling.</p>

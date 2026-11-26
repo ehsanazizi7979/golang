@@ -18,6 +18,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const chapter2 = require('./snippetbox/routes');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -152,7 +153,8 @@ function layout(opts) {
   ${link('/console', 'Console')}
   ${link('/showcase', 'Showcase')}
   ${link('/routes', 'Routes')}
-  ${link('/summary', 'Chapter 1')}
+  ${link('/summary', 'Summary')}
+  <li><a href="/home" ${active === '/home' ? 'class=on' : ''}>Templated home</a></li>
   <li class="right"><a href="/" target="_blank" rel="noopener">GET / <span class="muted">raw</span></a></li>
 </ul></nav>
 <main>${body}</main>
@@ -362,6 +364,9 @@ function handler(req, res) {
       ms: Number(process.hrtime.bigint() - started) / 1e6,
     });
   });
+
+  // Chapter 2.7-2.8: templated home page and the static file server.
+  if (chapter2.handle(req, res, url)) return;
 
   // 1. The home route.
   if (p === '/') {
