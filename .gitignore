@@ -1,0 +1,8 @@
+# Playwright / npm artefacts from local verification — not part of the deliverable
+node_modules/
+package-lock.json
+package.json
+
+# interim extraction artefacts
+assets/fig_raw_*
+assets/_page7.png
