@@ -369,10 +369,9 @@ function handler(req, res) {
   }
 
   // 2. A URL query string.
+  //    Like the book's snippetView handler, this does not inspect r.Method:
+  //    chapter 2.4 only adds the method check to /snippet/create.
   if (p === '/snippet/view') {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      return httpError(res, 405, 'Method Not Allowed', { Allow: 'GET' });
-    }
     const raw = url.searchParams.get('id');
     if (raw === null || !/^-?\d+$/.test(raw) || Number(raw) < 1) {
       return httpError(res, 404, '404 page not found');
@@ -419,6 +418,21 @@ function handler(req, res) {
 }
 
 const server = http.createServer(handler);
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use — stop the other process or run with PORT=3001`);
+  } else {
+    console.error('Server error:', err.message);
+  }
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`Snippetbox demo listening on http://${HOST}:${PORT}  (console: /console)`);
 });
+
+// Shut down cleanly so a restart always frees the port.
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => server.close(() => process.exit(0)));
+}
