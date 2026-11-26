@@ -6,3 +6,6 @@ package.json
 # interim extraction artefacts
 assets/fig_raw_*
 assets/_page7.png
+
+# page renders used while extracting the figure
+assets/page6_render.png
