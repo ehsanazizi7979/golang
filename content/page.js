@@ -1,4 +1,4 @@
-/* Page script for chapter-one.html — the chapters 1-3 summary.
+/* Page script for chapter-one.html — the chapters 1-4 summary.
  *
  * Kept as a real .js file (rather than a Python string) so the escaping is
  * unambiguous; build_chapter1.py inlines it into the generated page. */
@@ -219,6 +219,114 @@
     btn.addEventListener('click', function () { run(btn.getAttribute('data-run'), btn); });
   });
 
+  /* ------------------------------------------------------------ chapter 4 */
+
+  var CH4_SLOT = { params: 'sql', 'safe-inject': 'sql', 'bad-inject': 'sql',
+                   get: 'model', get99: 'model', latest: 'model', create: 'model', tx: 'tx' };
+
+  function ch4Query(mode, id) {
+    return fetch(DEMO + '/api/db/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: mode, id: id })
+    }).then(function (r) { return r.json(); });
+  }
+
+  function renderQuery(r) {
+    if (!r.ok) return 'error: ' + r.error + '\n\nSQL sent:\n' + (r.sql || '');
+    var out = ['SQL:  ' + r.sql];
+    if (r.params && r.params.length) out.push('args: ' + JSON.stringify(r.params));
+    out.push('');
+    out.push(r.rows.length ? r.rows.length + ' row(s):' : '0 rows');
+    r.rows.forEach(function (row) {
+      out.push('  {ID:' + row.id + ' Title:' + row.title + ' Content:' + row.content +
+               ' Created:' + row.created + ' Expires:' + row.expires + '}');
+    });
+    if (r.note) out.push('', r.note);
+    return out.join('\n');
+  }
+
+  document.querySelectorAll('[data-ch4]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key = btn.getAttribute('data-ch4');
+      var slot = document.querySelector('[data-ch4-slot="' + (CH4_SLOT[key] || 'sql') + '"]');
+      btn.disabled = true;
+      var done = function () { btn.disabled = false; };
+
+      if (key === 'get' || key === 'get99') {
+        var id = key === 'get' ? 1 : 99;
+        fetch(DEMO + '/snippet/view?id=' + id, { cache: 'no-store' }).then(function (r) {
+          return r.text().then(function (body) { return [r, body]; });
+        }).then(function (pair) {
+          var res = pair[0], body = pair[1];
+          if (res.status === 404) {
+            message(slot, 404, 'not found',
+              'Get(' + id + ') -> nil, models.ErrNoRecord\n\n' +
+              'errors.Is(err, models.ErrNoRecord) is true, so snippetView()\n' +
+              'calls app.notFound(w) and the response is a plain 404 —\n' +
+              'exactly as an expired row behaves, because the SELECT filters\n' +
+              'on  expires > UTC_TIMESTAMP() .\n\n' +
+              'body: ' + body.trim());
+          } else {
+            message(slot, res.status, 'Get(' + id + ') -> Snippet', body.trim());
+          }
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'create') {
+        fetch(DEMO + '/snippet/create', { method: 'POST', redirect: 'manual' }).then(function (r) {
+          var location = r.headers.get('location');
+          return r.text().then(function () {
+            message(slot, r.status, 'See Other',
+              'POST /snippet/create\n\n' +
+              'HTTP/1.1 ' + r.status + ' ' + r.statusText + '\n' +
+              'Location: ' + location + '\n\n' +
+              'That is snippetCreate(): Insert() returns LastInsertId(), and the\n' +
+              'handler redirects to /snippet/view?id=' + (location || '').split('=')[1] + ' with\n' +
+              'http.StatusSeeOther (303) — which is why `curl -iL` follows it.');
+          });
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'latest') {
+        fetch(DEMO + '/snippets', { cache: 'no-store' }).then(function (r) {
+          return r.text().then(function (body) { return [r, body]; });
+        }).then(function (pair) {
+          var n = pair[1].trim().split(/\n(?=\{ID:)/).filter(Boolean).length;
+          message(slot, pair[0].status, 'Latest() -> ' + n + ' snippet' + (n === 1 ? '' : 's'), pair[1].trim());
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'tx') {
+        fetch(DEMO + '/api/db/transaction', { method: 'POST' }).then(function (r) {
+          return r.json();
+        }).then(function (r) {
+          var lines = r.log.map(function (e) {
+            return e.stmt + '   -- ' + e.status + (e.note ? '\n   ' + e.note : '');
+          });
+          lines.push('', 'committed: ' + r.committed, 'live rows after: ' + r.rowsAfter);
+          message(slot, 500, 'transaction rolled back', lines.join('\n'));
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      var mode = key === 'bad-inject' ? 'interpolated' : 'params';
+      var value = (key === 'params') ? '1' : '1 OR 1=1';
+      ch4Query(mode, value).then(function (r) {
+        message(slot, 200,
+          (r.injected ? 'injection succeeded' : 'statement executed'),
+          renderQuery(r));
+      }).catch(failOn(slot)).then(done);
+    });
+  });
+
+  function failOn(slot) {
+    return function (err) { fail(slot, err); };
+  }
+
   /* --------------------------------------------------------- live badges */
 
   function badge(id) {
@@ -235,6 +343,7 @@
   badge('demoState');
   badge('ch2State');
   badge('ch3State');
+  badge('ch4State');
 
   /* ------------------------------------------------------- replica form */
 

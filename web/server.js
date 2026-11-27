@@ -9,7 +9,7 @@
  *   GET  /                     -> 200 "Hello from Snippetbox"
  *   GET  /snippet/view?id=7    -> 200 "Display a specific snippet with ID 7..."
  *   GET  /snippet/view         -> 404 (missing/invalid id)
- *   POST /snippet/create       -> 200 "Create a new snippet..."
+ *   POST /snippet/create       -> 303 -> /snippet/view?id=N (chapter 4)
  *   *    /snippet/create        -> 405 + "Allow: POST"
  *
  * Plus three HTML pages that present it: /console, /showcase, /routes
@@ -21,11 +21,28 @@ const path = require('path');
 const chapter2 = require('./snippetbox/routes');
 const { parseConfig, Application } = require('./snippetbox/app');
 const chapter3 = require('./snippetbox/chapter3');
+const chapter4 = require('./snippetbox/chapter4');
+const models = require('./snippetbox/models');
 
 // Chapter 3.1: configuration comes from command-line flags, parsed before
 // anything else happens.
 const config = parseConfig(process.argv);
 const app = new Application(config);
+
+// Chapter 4.4: the pool is created once in main(), not per request. Here it is
+// an in-memory table, but the shape is the same: one long-lived object, passed
+// to the handlers as a dependency.
+const db = {
+  dsn: 'web:pass@/snippetbox?parseTime=true',
+  table: new models.Table(models.seed()),
+  pool: models.pool,
+  app,
+  model: null,
+  runSQL: (...args) => models.runSQL(db.table, ...args),
+  runTransaction: () => models.runTransaction(db.table),
+};
+db.model = new models.SnippetModel(db.table);
+db.pool.opened += 1; // db.Ping()
 
 const PORT = config.port;
 const HOST = config.host;
@@ -162,6 +179,7 @@ function layout(opts) {
   ${link('/routes', 'Routes')}
   ${link('/summary', 'Summary')}
   <li><a href="/home" ${active === '/home' ? 'class=on' : ''}>Templated home</a></li>
+  ${link('/db', 'Database')}
   ${link('/logs', 'Logs')}
   <li class="right"><a href="/" target="_blank" rel="noopener">GET / <span class="muted">raw</span></a></li>
 </ul></nav>
@@ -375,6 +393,8 @@ function handler(req, res) {
 
   // Chapter 2.7-2.8: templated home page and the static file server.
   if (chapter3.handle(req, res, url, app, config)) return;
+  // Chapter 4.7/4.8 own /snippet/view and /snippets, so they dispatch first.
+  if (chapter4.handle(req, res, url, db, app)) return;
   if (chapter2.handle(req, res, url, config, app)) return;
 
   // 1. The home route.
@@ -393,13 +413,11 @@ function handler(req, res) {
     return write(res, 200, `Display a specific snippet with ID ${Number(raw)}...`);
   }
 
-  // 3. Method-based routing.
+  // 3. Method-based routing. Since chapter 4, a valid POST /snippet/create is
+  // handled by the SnippetModel (it INSERTs and redirects with a 303), so only
+  // the 405 fallback is left here.
   if (p === '/snippet/create') {
-    if (req.method !== 'POST') {
-      return httpError(res, 405, 'Method Not Allowed', { Allow: 'POST' });
-    }
-    req.resume();
-    return write(res, 200, 'Create a new snippet...');
+    return httpError(res, 405, 'Method Not Allowed', { Allow: 'POST' });
   }
 
   // Presentation pages.
@@ -445,6 +463,7 @@ server.on('error', (err) => {
 // Chapter 3.2: informational messages go through infoLog, with the INFO prefix.
 server.listen(PORT, HOST, () => {
   app.infoLog.Printf('Starting server on %s', config.addr);
+  app.infoLog.Printf('Database: in-memory snippets table seeded with %d rows (db.Ping() ok)', db.table.rows.length);
   app.infoLog.Printf('Request console: http://%s/console', config.addr.replace(/^:/, 'localhost:'));
 });
 

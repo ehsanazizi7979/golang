@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build chapter-one.html — a single self-contained page covering
-chapters 1-3 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
+chapters 1-4 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
 
 Sources (all extracted from Let's Go [Alex Edwards].pdf in this directory)
 
@@ -9,6 +9,8 @@ Sources (all extracted from Let's Go [Alex Edwards].pdf in this directory)
   chapter 2   pp. 11-61   Foundations, sections 2.1 - 2.9
   chapter 3   pp.  62-85  Configuration and error handling, sections 3.1 - 3.5
                           (no figures in this chapter)
+  chapter 4   pp.  86-126 Database-driven responses, sections 4.1 - 4.9
+                          (5 figures: go.sum, models dir, %+v dumps, 404)
   main.go     p.  14      used by the live demo
 
 Figures
@@ -46,6 +48,11 @@ IMAGES = {
     "ch2-12": ROOT / "assets" / "ch2" / "12-static-listing.jpg",
     "ch2-13": ROOT / "assets" / "ch2" / "13-main-css.jpg",
     "ch2-14": ROOT / "assets" / "ch2" / "14-styled-home-page.jpg",
+    "ch4-01": ROOT / "assets" / "ch4" / "01-gosum.jpg",
+    "ch4-02": ROOT / "assets" / "ch4" / "02-models-package.jpg",
+    "ch4-03": ROOT / "assets" / "ch4" / "03-snippet-view.jpg",
+    "ch4-04": ROOT / "assets" / "ch4" / "04-expired-snippet-404.jpg",
+    "ch4-05": ROOT / "assets" / "ch4" / "05-latest-snippets.jpg",
 }
 
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
@@ -83,6 +90,15 @@ def verify_pages() -> None:
         73: "Dependency injection",
         79: "Centralized error handling",
         84: "Isolating the application routes",
+        86: "Database-driven responses",
+        87: "Setting up MySQL",
+        90: "Installing a database driver",
+        95: "Creating a database connection pool",
+        99: "Designing a database model",
+        104: "Executing SQL statements",
+        109: "Single-record SQL queries",
+        116: "Multiple-record SQL queries",
+        121: "Transactions and other details",
     }
     for pno, needle in checks.items():
         text = doc[pno - 1].get_text()
@@ -175,6 +191,8 @@ button.btn:hover,.btn:hover{border-color:#c9d4da;transform:translateY(-1px)}
 button.btn:disabled{opacity:.55;cursor:progress;transform:none}
 .btn--green{background:var(--green);border-color:var(--green);color:#fff;font-weight:600}
 .btn--green:hover{background:var(--green-dark);border-color:var(--green-dark)}
+.btn--red{background:#b3382c;border-color:#b3382c;color:#fff;font-weight:600}
+.btn--red:hover{background:#982e24;border-color:#982e24}
 .method{display:inline-block;font-family:var(--mono);font-size:11.5px;padding:2px 7px;border-radius:3px;border:1px solid;margin-right:8px;vertical-align:2px}
 .method.get{color:#2b7a90;border-color:#bfdbe3;background:#f1f9fb}
 .method.post{color:#7d5a00;border-color:#e8d9a8;background:#fdf8e6}
@@ -214,16 +232,17 @@ HERO = f"""
 <div class="hero">
   <div class="wrap">
     <p class="kicker">Let’s Go · Alex Edwards · 2nd edition, v2.20.0</p>
-    <h1>Chapters 1–3 — <span>Introduction</span><br>&amp; Foundations &amp; Configuration</h1>
+    <h1>Chapters 1–4 — <span>Introduction</span><br>&amp; Foundations to Databases</h1>
     <p>Build Snippetbox: a web app for pasting and sharing snippets of text. Chapter one sets the destination and
        the toolchain; chapter two builds the whole foundations of the app — modules, routing, headers, query
        strings, project structure, templates and static files. Chapter three adds nothing visible and makes
-       everything maintainable: flags, leveled logs, injected dependencies and centralised errors.</p>
+       everything maintainable: flags, leveled logs, injected dependencies and centralised errors. Chapter four
+       gives it a memory — a MySQL connection pool, a models package, and every shape of SQL call.</p>
     <div class="meta">
-      <span>80 pages of source (pp. 6–85)</span>
-      <span>15 figures, all embedded</span>
+      <span>121 pages of source (pp. 6–126)</span>
+      <span>20 figures, all embedded</span>
       <span>Live demo on port {DEMO_PORT}</span>
-      <span>Reading time ≈ 35 min</span>
+      <span>Reading time ≈ 50 min</span>
     </div>
   </div>
 </div>
@@ -267,6 +286,20 @@ TOC = """
       <li><a href="#ch3-demo">Chapter 3 live</a></li>
       <li><a href="#ch3-takeaways">Takeaways</a></li>
     </ol>
+    <p class="part">Chapter 4 · Database</p>
+    <ol>
+      <li><a href="#s41">4.1 MySQL setup</a></li>
+      <li><a href="#s42">4.2 Driver</a></li>
+      <li><a href="#s43">4.3 go.mod / go.sum</a></li>
+      <li><a href="#s44">4.4 Connection pool</a></li>
+      <li><a href="#s45">4.5 The models package</a></li>
+      <li><a href="#s46">4.6 Exec()</a></li>
+      <li><a href="#s47">4.7 QueryRow()</a></li>
+      <li><a href="#s48">4.8 Query()</a></li>
+      <li><a href="#s49">4.9 Transactions</a></li>
+      <li><a href="#ch4-demo">Chapter 4 live</a></li>
+      <li><a href="#ch4-takeaways">Takeaways</a></li>
+    </ol>
   </nav>
 """
 
@@ -279,6 +312,7 @@ def build() -> str:
     ch1 = (ROOT / "content" / "chapter1.html").read_text(encoding="utf-8")
     ch2 = (ROOT / "content" / "chapter2.html").read_text(encoding="utf-8")
     ch3 = (ROOT / "content" / "chapter3.html").read_text(encoding="utf-8")
+    ch4 = (ROOT / "content" / "chapter4.html").read_text(encoding="utf-8")
 
     # chapter 1's hero/toc listed a "Where it goes next" section; keep its content
     # but retitle it so it reads as a bridge into chapter 2.
@@ -300,6 +334,8 @@ def build() -> str:
         + ch2.strip()
         + '\n<hr class="rule" id="chapter3">\n'
         + ch3.strip()
+        + '\n<hr class="rule" id="chapter4">\n'
+        + ch4.strip()
         + "\n</article></div>"
     )
 
@@ -308,7 +344,7 @@ def build() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Let&#39;s Go — chapters 1–3 summary</title>
+<title>Let&#39;s Go — chapters 1–4 summary</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -316,10 +352,10 @@ def build() -> str:
 {body}
 <footer>
   <div class="wrap">
-    Summary of chapters 1–3 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
+    Summary of chapters 1–4 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
     Alex Edwards (2nd edition, v2.20.0), generated from <code>Let’s Go [Alex Edwards].pdf</code> in this repository:
-    pages 6–10 for chapter 1, 11–61 for chapter 2 and 62–85 for chapter 3. All 15 figures — chapter 3 has none —
-    were extracted with PyMuPDF and inlined as base64, so this file needs no network access.<br>
+    pages 6–10 for chapter 1, 11–61 for chapter 2, 62–85 for chapter 3 and 86–126 for chapter 4. All 20 figures —
+    chapter 3 has none — were extracted with PyMuPDF and inlined as base64, so this file needs no network access.<br>
     Live demo: <code>web/snippetbox/</code> — the book’s own templates, static directory, flags and loggers, served by
     <code>web/server.js</code> on port {DEMO_PORT}. Rebuild this page with
     <code>python3 build_chapter1.py</code>.
