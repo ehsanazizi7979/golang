@@ -1,0 +1,245 @@
+<div class="cover">
+      <img src="{{IMG:book-cover}}" alt="Cover of Let’s Go by Alex Edwards, 2nd edition">
+      <div>
+        <strong>Let’s Go: Learn to build professional web applications with Go</strong>
+        Alex Edwards · 2nd edition · version 2.20.0, last updated 2023-02-17 · 426 pages.
+        Chapter one is the on-ramp: what we’re building, what you need installed, and how to read the code samples.
+      </div>
+    </div>
+
+    <h2 class="sec" id="intro">The chapter</h2>
+    <h3>“In this book we’ll be building a web application called Snippetbox.”</h3>
+    <p class="lead">Snippetbox lets people paste and share snippets of text — a bit like
+      <a href="https://pastebin.com/" target="_blank" rel="noopener">Pastebin</a> or
+      <a href="https://gist.github.com/" target="_blank" rel="noopener">GitHub’s Gists</a>. By the end of the book it
+      looks like the screenshot below: a “Create a New Snippet” page with a title field, a content box, a
+      <em>Delete in</em> choice of one year / one week / one day, and a green <em>Publish snippet</em> button.</p>
+    <p>The application starts off super simple, with just one web page. Then with each chapter it’s built up
+      step-by-step until a user can save and view snippets through the app. That journey covers how to structure a
+      project, routing requests, working with a database, processing forms and displaying dynamic data safely.</p>
+    <p>Later in the book user accounts are added, and the application is restricted so that only registered users can
+      create snippets — which brings in configuring a HTTPS server, session management, user authentication and
+      middleware.</p>
+
+    <h2 class="sec" id="figure">Figure 1.1 — the finished app</h2>
+    <figure class="shot">
+      <img src="{{IMG:snippetbox-app}}" alt="Screenshot of the finished Snippetbox application: a Create a New Snippet page with Title, Content, Delete in options and a Publish snippet button.">
+      <figcaption><b>The only figure in chapter one.</b> Extracted from page 6 of the PDF and embedded in this file as
+        base64, so the page works offline and has no external dependencies. The address bar reads
+        <code>https://localhost:4000/snippet/create</code> — the route built in chapter 2.3, served over the TLS
+        listener from chapter 10.</figcaption>
+    </figure>
+    <p class="note"><b>Why show the end first?</b> Everything in chapters 2–15 is a step towards this one form. Keeping
+      the screenshot in mind makes the incremental refactors — a handler, then a servemux, then templates, then a
+      database — feel like progress rather than churn.</p>
+
+    <h2 class="sec" id="path">The route from one page to a real app</h2>
+    <table>
+      <thead><tr><th>Stage</th><th>What gets added</th><th>Where in the book</th></tr></thead>
+      <tbody>
+        <tr><td>One web page</td><td>Handlers, a servemux, <code>http.ListenAndServe</code></td><td>Ch. 2, Foundations</td></tr>
+        <tr><td>Structure</td><td>Configuration, logging, dependency injection, error handling</td><td>Ch. 3</td></tr>
+        <tr><td>Snippets persist</td><td>MySQL connection pool, models, SQL queries, transactions</td><td>Ch. 4</td></tr>
+        <tr><td>Dynamic pages</td><td>HTML templates, cached templates, custom functions</td><td>Ch. 5</td></tr>
+        <tr><td>Forms</td><td>Parsing, validating, repopulating, displaying errors</td><td>Ch. 8</td></tr>
+        <tr><td>Users</td><td>Sessions, signup, login, authorization, CSRF</td><td>Ch. 9–12</td></tr>
+        <tr><td>Production</td><td>HTTPS, timeouts, security headers, tests</td><td>Ch. 10, 14</td></tr>
+      </tbody>
+    </table>
+
+    <h2 class="sec" id="demo">Live demo</h2>
+    <p>Chapter one contains no Go code of its own, so the demo below is the first thing it promises: the Snippetbox
+      server from chapters 2.2–2.5, running right now on this machine and serving genuine HTTP responses. Press the
+      buttons — each one issues a real request and shows the status line, headers and body that the book's handlers
+      produce.</p>
+
+    <div class="demo">
+      <div class="demo__head">
+        <h3>Snippetbox request console</h3>
+        <span class="live"><i></i><span id="demoState">connecting…</span></span>
+        <a class="btn" id="openDemo" href="http://localhost:3000/console" target="_blank" rel="noopener" style="margin-left:auto">Open full console ↗</a>
+      </div>
+
+      <div class="demo__body">
+        <p style="margin:0 0 10px"><span class="method get">GET</span><code class="path">/</code>
+          <span style="color:#7b8b93;font-size:14px">— the home handler</span></p>
+        <div class="row">
+          <button class="btn btn--green" data-run="GET /">Send request</button>
+        </div>
+        <div class="resp" data-slot="home" hidden></div>
+
+        <hr class="rule" style="margin:22px 0">
+
+        <p style="margin:0 0 10px"><span class="method get">GET</span><code class="path">/snippet/view?id=7</code>
+          <span style="color:#7b8b93;font-size:14px">— query strings</span></p>
+        <div class="row">
+          <button class="btn btn--green" data-run="GET /snippet/view?id=7">Valid id</button>
+          <button class="btn" data-run="GET /snippet/view?id=abc">Invalid id</button>
+          <button class="btn" data-run="GET /snippet/view">Missing id</button>
+        </div>
+        <div class="resp" data-slot="view" hidden></div>
+
+        <hr class="rule" style="margin:22px 0">
+
+        <p style="margin:0 0 10px"><span class="method post">POST</span><code class="path">/snippet/create</code>
+          <span style="color:#7b8b93;font-size:14px">— method-based routing and 405s</span></p>
+        <div class="row">
+          <button class="btn btn--green" data-run="POST /snippet/create">POST request</button>
+          <button class="btn" data-run="GET /snippet/create">GET</button>
+          <button class="btn" data-run="PUT /snippet/create">PUT</button>
+          <button class="btn" data-run="DELETE /snippet/create">DELETE</button>
+        </div>
+        <div class="resp" data-slot="create" hidden></div>
+
+        <hr class="rule" style="margin:22px 0">
+
+        <p style="margin:0 0 10px"><strong>The form from the screenshot</strong>
+          <span style="color:#7b8b93;font-size:14px">— non-functional replica, kept here so you can compare with Figure 1.1</span></p>
+        <div class="field"><label for="dTitle">Title:</label>
+          <input id="dTitle" type="text" placeholder="An example snippet"></div>
+        <div class="field"><label for="dContent">Content:</label>
+          <textarea id="dContent" placeholder="Paste anything you like here…"></textarea></div>
+        <div class="radios">
+          <span>Delete in:</span>
+          <label><input type="radio" name="demo-del" checked> One Year</label>
+          <label><input type="radio" name="demo-del"> One Week</label>
+          <label><input type="radio" name="demo-del"> One Day</label>
+        </div>
+        <button class="btn btn--green" id="publishBtn">Publish snippet</button>
+      </div>
+
+      <div class="demo__foot">
+        <span>Server: <code>GET /</code> · <code>GET /snippet/view</code> · <code>POST /snippet/create</code> · <code>GET /api/log</code></span>
+        <a href="http://localhost:3000/routes" target="_blank" rel="noopener">route table</a>
+        <a href="http://localhost:3000/showcase" target="_blank" rel="noopener">showcase page</a>
+        <a href="http://localhost:3000/" target="_blank" rel="noopener">raw “Hello from Snippetbox”</a>
+      </div>
+    </div>
+    <p style="font-size:14px;color:#7b8b93">The demo server is plain Node.js with zero dependencies, started separately
+      from this file. If a request fails, start it with <code>node web/server.js</code> in the repository root, then
+      reload. Everything above degrades gracefully: the HTML summary, figure and code samples all work offline.</p>
+
+    <h2 class="sec" id="learned">Prerequisites — background knowledge</h2>
+    <p>The book is designed for people who are new to Go, but it’s more enjoyable if you have a general understanding
+      of Go’s syntax first. If you find yourself struggling with the syntax, <em>The Little Go Book</em> by Karl Seguin
+      is a fantastic tutorial, and for something more interactive the <em>Tour of Go</em> is the recommendation.</p>
+    <p>You’re also expected to have a (very) basic understanding of HTML/CSS and SQL, and some familiarity with using a
+      terminal. If you’ve built a web application in any other language before — Ruby, Python, PHP or C# — the book is
+      a good fit.</p>
+    <ul class="chips">
+      <li>Go syntax basics</li>
+      <li>Basic HTML &amp; CSS</li>
+      <li>Basic SQL</li>
+      <li>Comfortable in a terminal</li>
+    </ul>
+    <p style="margin-top:14px">Helpful links from the chapter:
+      <a href="http://openmymind.net/The-Little-Go-Book/" target="_blank" rel="noopener">The Little Go Book</a> ·
+      <a href="https://tour.golang.org/welcome/1" target="_blank" rel="noopener">A Tour of Go</a></p>
+
+    <h2 class="sec" id="go120">Prerequisites — Go 1.20</h2>
+    <p>The book is correct for the latest major release of Go (version 1.20), and that’s the version to install if you
+      want to code along. If Go is already installed, check it from the terminal with <code>go version</code>:</p>
+
+    <div class="codeblock">
+      <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+      <pre class="term"><span class="prompt">$ go version</span>
+<span class="out">go version go1.20 linux/amd64</span></pre>
+    </div>
+
+    <p>If you need to upgrade — or install Go from scratch — do it now. The chapter points at these instructions:</p>
+    <table>
+      <thead><tr><th>Task</th><th>Link given in the book</th></tr></thead>
+      <tbody>
+        <tr><td>Remove an old version of Go</td><td><a href="https://golang.org/doc/manage-install#uninstalling" target="_blank" rel="noopener">golang.org/doc/manage-install</a></td></tr>
+        <tr><td>Install on macOS</td><td><a href="https://golang.org/doc/install#tarball" target="_blank" rel="noopener">golang.org/doc/install</a></td></tr>
+        <tr><td>Install on Windows</td><td><a href="https://golang.org/doc/install#windows" target="_blank" rel="noopener">golang.org/doc/install</a></td></tr>
+        <tr><td>Install on Linux</td><td><a href="https://golang.org/doc/install#tarball" target="_blank" rel="noopener">golang.org/doc/install</a></td></tr>
+        <tr><td>Release history</td><td><a href="https://golang.org/doc/devel/release.html" target="_blank" rel="noopener">golang.org/doc/devel/release.html</a></td></tr>
+      </tbody>
+    </table>
+
+    <h2 class="sec" id="software">Prerequisites — other software</h2>
+    <p>A few other bits of software should be available if you want to follow along fully:</p>
+    <ol class="steps">
+      <li><strong><code>curl</code></strong> — for working with HTTP requests and responses from your terminal. On macOS
+        and Linux it’s usually pre-installed or in your software repositories; otherwise
+        <a href="https://curl.haxx.se/download.html" target="_blank" rel="noopener">download the latest version</a>.</li>
+      <li><strong>A web browser with good developer tools</strong> — the book uses Firefox, but Chromium, Chrome or
+        Microsoft Edge work just as well.</li>
+      <li><strong>Your favourite text editor</strong> — the chapter ends there, mid-sentence, because any editor will do.</li>
+    </ol>
+
+    <h2 class="sec" id="conventions">How to read the book</h2>
+    <p>Chapter one also sets the conventions used throughout — worth knowing before you copy a single line.</p>
+    <p>Code blocks have a silver background; long blocks may replace irrelevant parts with an ellipsis. Most blocks carry
+      a title bar naming the file you’re working on:</p>
+
+    <div class="codeblock">
+      <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: hello.go</span><span class="lang">go</span></div>
+      <pre class="code is-highlighted"><span class="kw">package</span> main
+
+<span class="lit">...</span> <span class="com">// Indicates that some existing code has been omitted.</span>
+
+<span class="kw">func</span> sayHello() {
+    fmt.Println(<span class="str">"Hello world!"</span>)
+}</pre>
+    </div>
+
+    <p>Terminal instructions have a black background and start with a dollar sign. They work on any Unix-based system,
+      macOS and Linux alike; sample output appears in silver beneath the command:</p>
+
+    <div class="codeblock">
+      <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+      <pre class="term"><span class="prompt">$ echo "Hello world!"</span>
+<span class="out">Hello world!</span></pre>
+    </div>
+
+    <p>On Windows, substitute the DOS equivalent or use the normal Windows GUI. Some chapters finish with an
+      <em>additional information</em> section that isn’t needed for the build but is still important — very new Gophers
+      can skip those and circle back later.</p>
+
+    <p class="note"><b>Hint from the book:</b> if you’re following along with the application build, use the HTML version
+      of the book rather than the PDF or EPUB. It works in all browsers, and the formatting of code blocks is retained if
+      you want to copy-and-paste code directly.</p>
+
+    <h2 class="sec">The chapter’s one piece of code</h2>
+    <p>Strictly, chapter one ships no Go. The very next chapter opens with the project skeleton and the traditional
+      first program, included here because it’s what the live demo is built on:</p>
+
+    <div class="codeblock">
+      <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: main.go</span><span class="lang">go</span></div>
+      <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> <span class="str">"fmt"</span>
+
+<span class="kw">func</span> main() {
+    fmt.Println(<span class="str">"Hello world!"</span>)
+}</pre>
+    </div>
+
+    <div class="codeblock">
+      <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+      <pre class="term"><span class="prompt">$ touch main.go</span>
+<span class="prompt">$ go run .</span>
+<span class="out">Hello world!</span></pre>
+    </div>
+
+    <h2 class="sec" id="next">Where it goes next</h2>
+    <p>Chapter one ends with the machine ready and the destination clear. Chapter 2, <em>Foundations</em>, immediately
+      starts building:</p>
+    <pre class="term" style="border-radius:8px"><span class="prompt">Chapter 2.1</span>  Project setup and creating a module
+<span class="prompt">Chapter 2.2</span>  Web application basics        <span class="out">← the live demo's "/" route</span>
+<span class="prompt">Chapter 2.3</span>  Routing requests                <span class="out">← /snippet/view and /snippet/create</span>
+<span class="prompt">Chapter 2.4</span>  Customizing HTTP headers        <span class="out">← the 405 + Allow: POST behaviour</span>
+<span class="prompt">Chapter 2.5</span>  URL query strings               <span class="out">← ?id= query parsing</span>
+<span class="prompt">Chapter 2.6</span>  Project structure and organization
+<span class="prompt">Chapter 2.7</span>  HTML templating and inheritance
+<span class="prompt">Chapter 2.8</span>  Serving static files
+<span class="prompt">Chapter 2.9</span>  The http.Handler interface</pre>
+
+    <hr class="rule">
+
+    <p style="font-size:15px;color:#54636c">A paragraph-by-paragraph summary of chapter one of
+      <em>Let’s Go: Learn to build professional web applications with Go</em> by Alex Edwards (2nd edition, v2.20.0),
+      with the chapter’s single figure and its code samples embedded. Demo server and this page are independent of the
+      book; the book text is summarised, not reproduced.</p>

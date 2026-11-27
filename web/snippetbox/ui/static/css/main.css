@@ -1,0 +1,142 @@
+/* The stylesheet from chapter 2.8 of Let's Go, reproduced so the live demo's
+   home page looks like figure 14. Values are taken from the book's own
+   screenshot of ui/static/css/main.css (page 54). */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-size: 18px;
+    font-family: "Ubuntu Mono", monospace;
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    line-height: 1.5;
+    background-color: #F1F3F6;
+    color: #34495E;
+    overflow-y: scroll;
+}
+
+header, nav, main, footer {
+    padding: 2px calc((100% - 800px) / 2) 0;
+}
+
+main {
+    margin-top: 54px;
+    margin-bottom: 54px;
+    min-height: calc(100vh - 345px);
+    overflow: auto;
+}
+
+h1 a {
+    font-size: 36px;
+    font-weight: bold;
+    background-image: url("/static/img/logo.svg");
+    background-repeat: no-repeat;
+    background-position: 0px 0px;
+    height: 36px;
+    padding-left: 50px;
+    position: relative;
+    text-decoration: none;
+    color: #34495E;
+}
+
+h1 a:hover {
+    text-decoration: none;
+}
+
+header {
+    background-image: linear-gradient(to bottom, #34495E 0%, #34495E 100%);
+    background-size: 100% 6px;
+    background-repeat: no-repeat;
+    background-position: top;
+    border-bottom: 1px solid #E4E5E7;
+    overflow: auto;
+    padding-top: 33px;
+    padding-bottom: 27px;
+    text-align: center;
+}
+
+header a {
+    text-decoration: none;
+}
+
+nav {
+    border-bottom: 1px solid #E4E5E7;
+    padding-top: 17px;
+    padding-bottom: 15px;
+    background: #F7F9FA;
+    height: 60px;
+    color: #6A6C6F;
+}
+
+nav a {
+    margin-right: 1.5em;
+    display: inline-block;
+    color: #6A6C6F;
+}
+
+nav a:hover {
+    color: #63BA36;
+}
+
+main h2 {
+    font-size: 24px;
+    font-weight: normal;
+    margin-bottom: 1em;
+}
+
+main p {
+    margin-bottom: 1em;
+}
+
+footer {
+    border-top: 1px solid #E4E5E7;
+    padding-top: 17px;
+    padding-bottom: 15px;
+    background: #F7F9FA;
+    height: 60px;
+    color: #6A6C6F;
+    text-align: center;
+}
+
+/* ---------------------------------------------------------- demo additions */
+
+/* Only used by the extra pages this demo server hosts (chapter index,
+   template walkthrough, static file listing). Kept at the end so the home
+   page itself renders exactly like the book's screenshot. */
+
+.lede { color: #6A6C6F; }
+.snippet-list { list-style: none; }
+.snippet-list li { padding: 12px 0; border-bottom: 1px solid #E4E5E7; }
+.snippet-list a { color: #34495E; }
+.snippet-list .meta { display: block; color: #9AA3AB; font-size: 14px; }
+
+pre {
+    background: #F9F9F9;
+    border: 1px solid #EDEDED;
+    padding: 14px 16px;
+    overflow: auto;
+    font-size: 14px;
+    margin-bottom: 1em;
+    white-space: pre;
+}
+
+code { font-family: "Ubuntu Mono", monospace; }
+
+table { width: 100%; border-collapse: collapse; font-size: 16px; margin-bottom: 1em; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #E4E5E7; vertical-align: top; }
+th { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: #9AA3AB; }
+
+.badge {
+    display: inline-block;
+    font-size: 13px;
+    background: #63BA36;
+    color: #fff;
+    padding: 1px 8px;
+    border-radius: 3px;
+}

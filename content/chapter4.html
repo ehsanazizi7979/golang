@@ -1,0 +1,631 @@
+<h2 class="sec" id="ch4" style="margin-top:0">Chapter 4 — Database-driven responses</h2>
+<h3>“Somewhere to store the data”</h3>
+<p class="lead">Chapter 4 gives Snippetbox a memory. It installs MySQL, wires up a connection pool, extracts a
+  reusable <code>models</code> package, and then walks through the three shapes of SQL call — <code>Exec</code>
+  for writes, <code>QueryRow</code> for one row, <code>Query</code> for many — plus transactions and the
+  prepared-statement trade-off.</p>
+
+<p class="note"><b>A note on the live demo.</b> There is no MySQL server in this sandbox, so the demo replaces the
+  database with an in-memory <code>snippets</code> table. Everything else is faithful: the same SQL statements, the
+  same <code>?</code> placeholder parameters, the same <code>SnippetModel</code> methods, the same
+  <code>models.ErrNoRecord</code> behaviour, and a real Begin/Rollback/Commit cycle. The
+  <code>%+v</code> output below is byte-for-byte the shape the book prints in its screenshots.</p>
+
+<h2 class="sec" id="s41">4.1 · Setting up MySQL</h2>
+<p>The chapter creates a UTF-8 database, a <code>snippets</code> table, and seeds it with three haiku. The table
+  is deliberately simple: an auto-incrementing <code>id</code>, a short <code>title</code>, the
+  <code>content</code>, and two timestamps — when the snippet was made and when it expires.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>mysql — the schema</span><span class="lang">sql</span></div>
+  <pre class="code"><span class="kw">CREATE DATABASE</span> snippetbox <span class="kw">CHARACTER SET</span> utf8mb4 <span class="kw">COLLATE</span> utf8mb4_unicode_ci;
+<span class="kw">USE</span> snippetbox;
+
+<span class="kw">CREATE TABLE</span> snippets (
+    id <span class="kw">INTEGER NOT NULL PRIMARY KEY AUTO_INCREMENT</span>,
+    title <span class="kw">VARCHAR</span>(100) <span class="kw">NOT NULL</span>,
+    content <span class="kw">TEXT NOT NULL</span>,
+    created <span class="kw">DATETIME NOT NULL</span>,
+    expires <span class="kw">DATETIME NOT NULL</span>
+);
+
+<span class="com">-- Add an index on the created column.</span>
+<span class="kw">CREATE INDEX</span> idx_snippets_created <span class="kw">ON</span> snippets(created);</pre>
+</div>
+
+<p>Three sample records are inserted — two that expire in a year, one that expires in a week (which is useful
+  later, because it lets the queries demonstrate expiry filtering):</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>mysql — the seed data</span><span class="lang">sql</span></div>
+  <pre class="code"><span class="kw">INSERT INTO</span> snippets (title, content, created, expires) <span class="kw">VALUES</span> (
+    <span class="str">'An old silent pond'</span>,
+    <span class="str">'An old silent pond...\nA frog jumps into the pond,\nsplash! Silence again.\n\n– Matsuo Bashō'</span>,
+    <span class="kw">UTC_TIMESTAMP()</span>,
+    <span class="kw">DATE_ADD</span>(<span class="kw">UTC_TIMESTAMP()</span>, <span class="kw">INTERVAL</span> 365 <span class="kw">DAY</span>)
+);</pre>
+</div>
+
+<p>Connections are made as a restricted <code>web</code> user with only the privileges the application needs — never
+  as <code>root</code>:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>mysql — a least-privilege user</span><span class="lang">sql</span></div>
+  <pre class="code"><span class="kw">CREATE USER</span> <span class="str">'web'</span>@<span class="str">'localhost'</span>;
+<span class="kw">GRANT SELECT, INSERT, UPDATE, DELETE ON</span> snippetbox.* <span class="kw">TO</span> <span class="str">'web'</span>@<span class="str">'localhost'</span>;
+<span class="com">-- Important: Make sure to swap 'pass' with a password of your own choosing.</span>
+<span class="kw">ALTER USER</span> <span class="str">'web'</span>@<span class="str">'localhost'</span> <span class="kw">IDENTIFIED BY</span> <span class="str">'pass'</span>;</pre>
+</div>
+
+<p class="note"><b>Verifying the permissions.</b> As <code>web</code>, <code>SELECT</code> works and
+  <code>DROP TABLE</code> does not: <code>ERROR 1142 (42000): DROP command denied to user 'web'@'localhost' for
+  table 'snippets'</code>. That is the point of the restricted user.</p>
+
+<h2 class="sec" id="s42">4.2 · Installing a database driver</h2>
+<p>Go talks to MySQL through a driver, which translates between <code>database/sql</code> and the database. The
+  book uses <code>go-sql-driver/mysql</code>, pinned to a major version:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go get github.com/go-sql-driver/mysql@v1</span>
+<span class="out">go: downloading github.com/go-sql-driver/mysql v1.7.0</span></pre>
+</div>
+
+<p>The <code>@v1</code> suffix means “the latest v1.x.x”; any release in that series is compatible. Omitting the
+  suffix takes the newest version regardless of major number, and a full version pins it exactly.</p>
+
+<h2 class="sec" id="s43">4.3 · Modules and reproducible builds</h2>
+<p>Downloading a package changes two files. <code>go.mod</code> gains a <code>require</code> line naming the exact
+  version; <code>go.sum</code> gains cryptographic checksums of the package contents.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: go.mod</span><span class="lang">go.mod</span></div>
+  <pre class="code">module snippetbox.alexedwards.net
+
+go 1.20
+
+require github.com/go-sql-driver/mysql v1.7.0</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch4-01}}" alt="A terminal window showing the contents of go.sum: two checksum lines for the MySQL driver, one for the module and one for its go.mod.">
+  <figcaption><b>Figure 4.1</b> — <code>go.sum</code>: one line for the module, one for its <code>go.mod</code>.
+    This file is not meant to be edited by hand.</figcaption>
+</figure>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: go.sum</span><span class="lang">go.sum</span></div>
+  <pre class="code">github.com/go-sql-driver/mysql v1.7.0 h1:ueSltNNllEqE3qcWBTD0iQd3IpL/6U+mJxLkazJ7YPc=
+github.com/go-sql-driver/mysql v1.7.0/go.mod h1:OXbVy3sEdcQ2Doequ6Z5BW6fXNQTmx+9S1MCJN5yJMI=</pre>
+</div>
+
+<p>Together these give <code>go mod download</code> (fetch exactly these versions) and <code>go mod verify</code>
+  (confirm nothing was altered) — which is what makes a build reproducible:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go mod verify</span>
+<span class="out">all modules verified</span></pre>
+</div>
+
+<p class="note"><b>Additional information.</b> <code>go get -u pkg</code> upgrades to the latest minor/patch
+  release; <code>go get -u pkg@v2.0.0</code> jumps to a specific version. To drop a package, use
+  <code>go get pkg@none</code>, or <code>go mod tidy</code> once nothing references it.</p>
+
+<h2 class="sec" id="s44">4.4 · Creating a database connection pool</h2>
+<p>This is the section with the most misunderstood idea in it: <code>sql.Open()</code> does not return a
+  connection. It returns a <strong>pool</strong>, long-lived, safe for concurrent use, opening connections lazily as
+  needed.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>The pool</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// The sql.Open() function initializes a new sql.DB object, which is essentially a</span>
+<span class="com">// pool of database connections.</span>
+db, err := sql.Open(<span class="str">"mysql"</span>, <span class="str">"web:pass@/snippetbox?parseTime=true"</span>)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    ...
+}</pre>
+</div>
+
+<p>Because connections are lazy, a successful <code>sql.Open()</code> proves nothing. <code>db.Ping()</code> forces
+  one real connection, so the failure surfaces at start-up rather than on a user's first request:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// The openDB() function wraps sql.Open() and returns a sql.DB connection pool</span>
+<span class="com">// for a given DSN.</span>
+<span class="kw">func</span> openDB(dsn <span class="kw">string</span>) (*sql.DB, <span class="kw">error</span>) {
+    db, err := sql.Open(<span class="str">"mysql"</span>, dsn)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> <span class="kw">nil</span>, err
+    }
+
+    <span class="kw">if</span> err = db.Ping(); err != <span class="kw">nil</span> {
+        <span class="kw">return</span> <span class="kw">nil</span>, err
+    }
+
+    <span class="kw">return</span> db, <span class="kw">nil</span>
+}</pre>
+</div>
+
+<p>The driver import is prefixed with an underscore — the blank identifier — because <code>main.go</code> never
+  refers to anything in the package directly. It is imported only so its <code>init()</code> can register itself with
+  <code>database/sql</code>. The DSN comes from a new flag, so the database can change per environment:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Flags and the blank import</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">import</span> (
+    <span class="str">"database/sql"</span> <span class="com">// New import</span>
+    <span class="str">"flag"</span>
+    <span class="str">"log"</span>
+    <span class="str">"net/http"</span>
+    <span class="str">"os"</span>
+
+    _ <span class="str">"github.com/go-sql-driver/mysql"</span> <span class="com">// New import</span>
+)
+
+<span class="com">// Define a new command-line flag for the MySQL DSN string.</span>
+dsn := flag.String(<span class="str">"dsn"</span>, <span class="str">"web:pass@/snippetbox?parseTime=true"</span>, <span class="str">"MySQL data source name"</span>)</pre>
+</div>
+
+<p class="note"><b>Why <code>parseTime=true</code>.</b> Without it the driver returns <code>DATETIME</code> columns as
+  <code>[]byte</code> instead of <code>time.Time</code>. With a bad DSN the failure is immediate and explicit:
+  <code>ERROR … main.go:32: Error 1045: Access denied for user 'web'@'localhost' (using password: YES)</code>.</p>
+
+<p><b>Live:</b> <code>/db</code> shows the pool's configuration and the DSN the demo is using, and reports that
+  <code>db.Ping()</code> succeeded at start-up.</p>
+
+<h2 class="sec" id="s45">4.5 · Designing a database model</h2>
+<p>Rather than scattering SQL through handlers, the book extracts a <code>models</code> package under
+  <code>internal/</code>. It starts as a skeleton that returns dummy data — the point is the shape, not the SQL.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ mkdir -p internal/models</span>
+<span class="prompt">$ touch internal/models/snippets.go</span></pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch4-02}}" alt="A file manager showing snippetbox containing cmd, internal with a models subdirectory holding snippets.go, ui, go.mod and go.sum.">
+  <figcaption><b>Figure 4.2</b> — the new <code>internal/models/snippets.go</code>, alongside
+    <code>go.mod</code> and <code>go.sum</code>.</figcaption>
+</figure>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: internal/models/snippets.go — the skeleton</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> models
+
+<span class="kw">import</span> (
+    <span class="str">"database/sql"</span>
+    <span class="str">"time"</span>
+)
+
+<span class="com">// Define a Snippet type to hold the data for an individual snippet. Notice how</span>
+<span class="com">// the fields of the struct correspond to the fields in our MySQL snippets</span>
+<span class="com">// table?</span>
+<span class="kw">type</span> Snippet <span class="kw">struct</span> {
+    ID      <span class="kw">int</span>
+    Title   <span class="kw">string</span>
+    Content <span class="kw">string</span>
+    Created time.Time
+    Expires time.Time
+}
+
+<span class="com">// Define a SnippetModel type which wraps a sql.DB connection pool.</span>
+<span class="kw">type</span> SnippetModel <span class="kw">struct</span> {
+    DB *sql.DB
+}
+
+<span class="com">// This will insert a new snippet into the database.</span>
+<span class="kw">func</span> (m *SnippetModel) Insert(title <span class="kw">string</span>, content <span class="kw">string</span>, expires <span class="kw">int</span>) (<span class="kw">int</span>, <span class="kw">error</span>) {
+    <span class="kw">return</span> 0, <span class="kw">nil</span>
+}
+
+<span class="com">// This will return a specific snippet based on its id.</span>
+<span class="kw">func</span> (m *SnippetModel) Get(id <span class="kw">int</span>) (*Snippet, <span class="kw">error</span>) {
+    <span class="kw">return</span> <span class="kw">nil</span>, <span class="kw">nil</span>
+}
+
+<span class="com">// This will return the 10 most recently created snippets.</span>
+<span class="kw">func</span> (m *SnippetModel) Latest() ([]*Snippet, <span class="kw">error</span>) {
+    <span class="kw">return</span> <span class="kw">nil</span>, <span class="kw">nil</span>
+}</pre>
+</div>
+
+<p>The model is then constructed in <code>main()</code> and injected through the application struct, exactly like
+  the loggers in chapter 3:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Wiring the model in</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">type</span> application <span class="kw">struct</span> {
+    errorLog *log.Logger
+    infoLog  *log.Logger
+    snippets *models.SnippetModel
+}
+
+<span class="com">// Initialize a models.SnippetModel instance and add it to the application</span>
+<span class="com">// dependencies.</span>
+app := &amp;application{
+    errorLog: errorLog,
+    infoLog:  infoLog,
+    snippets: &amp;models.SnippetModel{DB: db},
+}</pre>
+</div>
+
+<p class="note"><b>Why this structure pays off.</b> Handlers stay limited to HTTP concerns; the model is one
+  encapsulated object that can be initialised and passed around; because its actions are methods on a type, it can
+  later be replaced by an interface and mocked in tests; and the database is chosen at runtime by the
+  <code>-dsn</code> flag.</p>
+
+<h2 class="sec" id="s46">4.6 · Executing SQL statements</h2>
+<p>Three methods cover every case: <code>DB.Query()</code> for SELECTs returning many rows,
+  <code>DB.QueryRow()</code> for a single row, and <code>DB.Exec()</code> for statements that return no rows. An
+  INSERT is the third kind.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: internal/models/snippets.go — Insert()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (m *SnippetModel) Insert(title <span class="kw">string</span>, content <span class="kw">string</span>, expires <span class="kw">int</span>) (<span class="kw">int</span>, <span class="kw">error</span>) {
+    <span class="com">// Write the SQL statement we want to execute. I've split it over two lines</span>
+    <span class="com">// for readability (which is why it's surrounded with backquotes instead</span>
+    <span class="com">// of normal double quotes).</span>
+    stmt := `INSERT INTO snippets (title, content, created, expires)
+    VALUES(?, ?, UTC_TIMESTAMP(), DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY))`
+
+    <span class="com">// Use the Exec() method on the embedded connection pool to execute the</span>
+    <span class="com">// statement. The first parameter is the SQL statement, followed by the</span>
+    <span class="com">// title, content and expiry values for the placeholder parameters. This</span>
+    <span class="com">// method returns a sql.Result type, which contains some basic</span>
+    <span class="com">// information about what happened when the statement was executed.</span>
+    result, err := m.DB.Exec(stmt, title, content, expires)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> 0, err
+    }
+
+    <span class="com">// Use the LastInsertId() method on the result to get the ID of our</span>
+    <span class="com">// newly inserted record in the snippets table.</span>
+    id, err := result.LastInsertId()
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> 0, err
+    }
+
+    <span class="com">// The ID returned has the type int64, so we convert it to an int type</span>
+    <span class="com">// before returning.</span>
+    <span class="kw">return</span> <span class="kw">int</span>(id), <span class="kw">nil</span>
+}</pre>
+</div>
+
+<p>The <code>sql.Result</code> gives <code>LastInsertId()</code> (the auto-increment id) and
+  <code>RowsAffected()</code>. Neither is universal — PostgreSQL, for example, has no
+  <code>LastInsertId()</code> — so check your driver. When you don't need the result, discard it with
+  <code>_, err := m.DB.Exec(…)</code>.</p>
+
+<p>Called from the handler, it inserts a hard-coded snippet and redirects to it with <code>http.StatusSeeOther</code>
+  (303) — which is why <code>curl -iL</code> follows the redirect and shows both responses:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — snippetCreate()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Create some variables holding dummy data. We'll remove these later on</span>
+<span class="com">// during the build.</span>
+title := <span class="str">"O snail"</span>
+content := <span class="str">"O snail\nClimb Mount Fuji,\nBut slowly, slowly!\n\n– Kobayashi Issa"</span>
+expires := 7
+
+<span class="com">// Pass the data to the SnippetModel.Insert() method, receiving the</span>
+<span class="com">// ID of the new record back.</span>
+id, err := app.snippets.Insert(title, content, expires)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    app.serverError(w, err)
+    <span class="kw">return</span>
+}
+
+<span class="com">// Redirect the user to the relevant page for the snippet.</span>
+http.Redirect(w, r, fmt.Sprintf(<span class="str">"/snippet/view?id=%d"</span>, id), http.StatusSeeOther)</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — the 303 and the redirect target</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl -iL -X POST http://localhost:4000/snippet/create</span>
+<span class="out">HTTP/1.1 303 See Other
+Location: /snippet/view?id=4
+Content-Length: 0
+
+HTTP/1.1 200 OK
+Content-Length: 40
+Content-Type: text/plain; charset=utf-8
+
+Display a specific snippet with ID 4...</span></pre>
+</div>
+
+<p class="note"><b>Placeholder parameters stop SQL injection.</b> <code>DB.Exec()</code> works in three steps: it
+  prepares the statement on the database (parsed and compiled), then sends the values <em>separately</em>, then
+  closes the statement. Because the values arrive after compilation the database treats them as pure data — they
+  cannot change the statement's intent. MySQL, SQL Server and SQLite use <code>?</code>; PostgreSQL uses
+  <code>$1, $2, $3</code>.</p>
+
+<p><b>Live:</b> on <code>/db</code>, run the same query with <code>1 OR 1=1</code> as a <code>?</code> parameter and
+  then interpolated into the SQL. The parameterised version returns no rows (it is just an odd id); the interpolated
+  version returns all three — because the value became part of the statement.</p>
+
+<h2 class="sec" id="s47">4.7 · Single-record SQL queries</h2>
+<p>Selecting one row follows a different pattern: <code>QueryRow()</code> returns a <code>*sql.Row</code>, and you
+  copy the columns into your struct with <code>Scan()</code>. If there is no row, the error appears at
+  <code>Scan()</code> time as <code>sql.ErrNoRows</code>.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: internal/models/snippets.go — Get()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (m *SnippetModel) Get(id <span class="kw">int</span>) (*Snippet, <span class="kw">error</span>) {
+    <span class="com">// Write the SQL statement we want to execute. Again, I've split it over two</span>
+    <span class="com">// lines for readability.</span>
+    stmt := `SELECT id, title, content, created, expires FROM snippets
+    WHERE expires > UTC_TIMESTAMP() AND id = ?`
+
+    <span class="com">// Use the QueryRow() method on the connection pool to execute our</span>
+    <span class="com">// SQL statement, passing in the untrusted id variable as the value for the</span>
+    <span class="com">// placeholder parameter. This returns a pointer to a sql.Row object which</span>
+    <span class="com">// holds the result from the database.</span>
+    row := m.DB.QueryRow(stmt, id)
+
+    <span class="com">// Initialize a pointer to a new zeroed Snippet struct.</span>
+    s := &amp;Snippet{}
+
+    <span class="com">// Use row.Scan() to copy the values from each field in sql.Row to the</span>
+    <span class="com">// corresponding field in the Snippet struct. Notice that the arguments</span>
+    <span class="com">// to row.Scan are *pointers* to the place you want to copy the data into,</span>
+    <span class="com">// and the number of arguments must be exactly the same as the number of</span>
+    <span class="com">// columns returned by your statement.</span>
+    err := row.Scan(&amp;s.ID, &amp;s.Title, &amp;s.Content, &amp;s.Created, &amp;s.Expires)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="com">// If the query returns no rows, then row.Scan() will return a</span>
+        <span class="com">// sql.ErrNoRows error. We use the errors.Is() function check for that</span>
+        <span class="com">// error specifically, and return our own ErrNoRecord error</span>
+        <span class="com">// instead (we'll create this in a moment).</span>
+        <span class="kw">if</span> errors.Is(err, sql.ErrNoRows) {
+            <span class="kw">return</span> <span class="kw">nil</span>, ErrNoRecord
+        } <span class="kw">else</span> {
+            <span class="kw">return</span> <span class="kw">nil</span>, err
+        }
+    }
+
+    <span class="com">// If everything went OK then return the Snippet object.</span>
+    <span class="kw">return</span> s, <span class="kw">nil</span>
+}</pre>
+</div>
+
+<p>The model translates the datastore's error into its own, so nothing outside the package depends on MySQL:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: internal/models/errors.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> models
+
+<span class="kw">import</span> (
+    <span class="str">"errors"</span>
+)
+
+<span class="kw">var</span> ErrNoRecord = errors.New(<span class="str">"models: no matching record found"</span>)</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — snippetView()</span><span class="lang">go</span></div>
+  <pre class="code">snippet, err := app.snippets.Get(id)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    <span class="kw">if</span> errors.Is(err, models.ErrNoRecord) {
+        app.notFound(w)
+    } <span class="kw">else</span> {
+        app.serverError(w, err)
+    }
+    <span class="kw">return</span>
+}
+
+<span class="com">// Write the snippet data as a plain-text HTTP response body.</span>
+fmt.Fprintf(w, <span class="str">"%+v"</span>, snippet)</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch4-03}}" alt="A browser at localhost:4000/snippet/view?id=1 showing the Go struct dump of the snippet: ID, Title, Content, Created and Expires.">
+  <figcaption><b>Figure 4.3</b> — <code>/snippet/view?id=1</code>: <code>%+v</code> prints the struct's field names
+    and values. That is a debugging aid, not a page — turning it into HTML is chapter 5's job.</figcaption>
+</figure>
+
+<figure class="shot">
+  <img src="{{IMG:ch4-04}}" alt="A browser showing a 404 page not found response for a snippet id that is expired or does not exist.">
+  <figcaption><b>Figure 4.4</b> — an expired or non-existent id. Because the SELECT filters on
+    <code>expires &gt; UTC_TIMESTAMP()</code>, an expired row is indistinguishable from a missing one:
+    <code>ErrNoRecord</code> → 404.</figcaption>
+</figure>
+
+<p class="note"><b>Additional information.</b> Prefer <code>errors.Is()</code> to <code>==</code>: since Go 1.13 an
+  error can be <em>wrapped</em>, and a wrapped error is a new value, so <code>==</code> would fail while
+  <code>errors.Is()</code> unwraps first (<code>errors.As()</code> does the same for types). The
+  <code>Get()</code> code can also be shortened, since <code>QueryRow()</code> defers its error until
+  <code>Scan()</code>.</p>
+
+<h2 class="sec" id="s48">4.8 · Multiple-record SQL queries</h2>
+<p>For many rows the method is <code>Query()</code>, and the resultset must be closed. The pattern is: check the
+  error, <code>defer rows.Close()</code>, loop with <code>rows.Next()</code> and <code>rows.Scan()</code>, then
+  check <code>rows.Err()</code>.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: internal/models/snippets.go — Latest()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (m *SnippetModel) Latest() ([]*Snippet, <span class="kw">error</span>) {
+    <span class="com">// Write the SQL statement we want to execute.</span>
+    stmt := `SELECT id, title, content, created, expires FROM snippets
+    WHERE expires > UTC_TIMESTAMP() ORDER BY id DESC LIMIT 10`
+
+    <span class="com">// Use the Query() method on the connection pool to execute our</span>
+    <span class="com">// SQL statement. This returns a sql.Rows resultset containing the result of</span>
+    <span class="com">// our query.</span>
+    rows, err := m.DB.Query(stmt)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> <span class="kw">nil</span>, err
+    }
+
+    <span class="com">// We defer rows.Close() to ensure the sql.Rows resultset is</span>
+    <span class="com">// always properly closed before the Latest() method returns. This defer</span>
+    <span class="com">// statement should come *after* you check for an error from the Query()</span>
+    <span class="com">// method. Otherwise, if Query() returns an error, you'll get a panic</span>
+    <span class="com">// trying to close a nil resultset.</span>
+    <span class="kw">defer</span> rows.Close()
+
+    <span class="com">// Initialize an empty slice to hold the Snippet structs.</span>
+    snippets := []*Snippet{}
+
+    <span class="kw">for</span> rows.Next() {
+        <span class="com">// Create a pointer to a new zeroed Snippet struct.</span>
+        s := &amp;Snippet{}
+
+        err = rows.Scan(&amp;s.ID, &amp;s.Title, &amp;s.Content, &amp;s.Created, &amp;s.Expires)
+        <span class="kw">if</span> err != <span class="kw">nil</span> {
+            <span class="kw">return</span> <span class="kw">nil</span>, err
+        }
+
+        snippets = <span class="kw">append</span>(snippets, s)
+    }
+
+    <span class="com">// When the rows.Next() loop has finished we call rows.Err() to retrieve any</span>
+    <span class="com">// error that was encountered during the iteration. It's important to</span>
+    <span class="com">// call this - don't assume that a successful iteration was completed</span>
+    <span class="com">// over the whole resultset.</span>
+    <span class="kw">if</span> err = rows.Err(); err != <span class="kw">nil</span> {
+        <span class="kw">return</span> <span class="kw">nil</span>, err
+    }
+
+    <span class="kw">return</span> snippets, <span class="kw">nil</span>
+}</pre>
+</div>
+
+<p class="note"><b>Important.</b> An open resultset keeps its underlying connection open. Forget
+  <code>rows.Close()</code> and a busy server can exhaust every connection in the pool — which is exactly the kind of
+  failure the chapter is trying to inoculate you against.</p>
+
+<p>Dumping <code>Latest()</code> from the home handler (with template rendering commented out) produces the
+  chapter's final screenshot — newest first, three records:</p>
+
+<figure class="shot">
+  <img src="{{IMG:ch4-05}}" alt="A browser at localhost:4000 showing four Go struct dumps of snippets, newest first, each with ID, Title, Content, Created and Expires.">
+  <figcaption><b>Figure 4.5</b> — <code>Latest()</code> dumped with <code>%+v</code>. Note the order:
+    <code>ORDER BY id DESC</code>, and the <code>LIMIT 10</code> that chapters 5+ will rely on.</figcaption>
+</figure>
+
+<p><b>Live:</b> <code>/snippets</code> returns this exact dump from the demo's model, and
+  <code>/snippet/view?id=1</code> returns the single-record dump. Expiring a row
+  (<code>/db/expire</code>) removes it from both.</p>
+
+<h2 class="sec" id="s49">4.9 · Transactions and other details</h2>
+<p><code>Exec()</code>, <code>Query()</code> and <code>QueryRow()</code> may each grab a different connection from the
+  pool — even back-to-back calls. When that matters (locking a table, or applying several statements as one unit),
+  wrap them in a transaction:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>The transaction pattern</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (m *ExampleModel) ExampleTransaction() <span class="kw">error</span> {
+    <span class="com">// Calling the Begin() method on the connection pool creates a new sql.Tx</span>
+    <span class="com">// object, which represents the in-progress database transaction.</span>
+    tx, err := m.DB.Begin()
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> err
+    }
+
+    <span class="com">// Defer a call to tx.Rollback() to ensure it is always called before the</span>
+    <span class="com">// function returns. If the transaction succeeds it will be already be</span>
+    <span class="com">// committed by the time tx.Rollback() is called, making tx.Rollback() a</span>
+    <span class="com">// no-op. Otherwise, in the event of an error, tx.Rollback() will rollback</span>
+    <span class="com">// the changes before the function returns.</span>
+    <span class="kw">defer</span> tx.Rollback()
+
+    <span class="com">// Call Exec() on the transaction, passing in your statement and any</span>
+    <span class="com">// parameters. It's important to notice that tx.Exec() is called on the</span>
+    <span class="com">// transaction object just created, NOT the connection pool.</span>
+    _, err = tx.Exec(<span class="str">"INSERT INTO ..."</span>)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> err
+    }
+
+    _, err = tx.Exec(<span class="str">"UPDATE ..."</span>)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> err
+    }
+
+    <span class="com">// If there are no errors, the statements in the transaction can be committed</span>
+    <span class="com">// to the database with the tx.Commit() method.</span>
+    err = tx.Commit()
+    <span class="kw">return</span> err
+}</pre>
+</div>
+
+<p class="note"><b>Important.</b> Always call either <code>Rollback()</code> or <code>Commit()</code> before
+  returning. If you don't, the connection stays open and never returns to the pool — the same resource-exhaustion
+  trap as an unclosed resultset. <code>defer tx.Rollback()</code> is the simple way to guarantee it.</p>
+
+<p><b>Live:</b> <code>/db/transaction</code> runs the pattern with two statements where the second fails, and shows
+  the log: <code>BEGIN</code> → <code>INSERT</code> → <code>ROLLBACK</code>, with the inserted row gone afterwards.
+  That is the all-or-nothing guarantee in action.</p>
+
+<p><strong>Also covered in this chapter.</strong> <code>database/sql</code> is a portable interface — MySQL,
+  PostgreSQL and SQLite all work through it, with driver quirks to check — and the code is verbose but
+  non-magical, which is the point. NULL values are awkward to scan (a NULL <code>title</code> fails with
+  <code>unsupported Scan, storing driver.Value type &lt;nil&gt; into type *string</code>); the easy fix is
+  <code>NOT NULL</code> constraints everywhere, as this schema does. And prepared statements
+  (<code>DB.Prepare()</code>) can be reused for complex, frequently-run queries, at the cost of complexity and
+  of statements being re-prepared across pool connections — measure before adopting them.</p>
+
+<h2 class="sec" id="ch4-demo">Chapter 4, running live</h2>
+<p>The demo's "database" is in memory, but the model, the statements and the behaviours are the chapter's:</p>
+
+<div class="demo">
+  <div class="demo__head">
+    <h3>Chapter 4 controls</h3>
+    <span class="live"><i></i><span id="ch4State">connecting…</span></span>
+    <a class="btn" href="http://localhost:3000/db" target="_blank" rel="noopener" style="margin-left:auto">Open the SQL playground ↗</a>
+  </div>
+  <div class="demo__body">
+    <p style="margin:0 0 10px"><strong>4.6 Placeholder parameters vs. interpolation</strong>
+      <span style="color:#7b8b93;font-size:14px">— the same input, two very different outcomes</span></p>
+    <div class="row">
+      <button class="btn btn--green" data-ch4="params">id = 1 as a ? parameter</button>
+      <button class="btn" data-ch4="safe-inject">"1 OR 1=1" as a ? parameter</button>
+      <button class="btn btn--red" data-ch4="bad-inject">"1 OR 1=1" interpolated</button>
+    </div>
+    <div class="resp" data-ch4-slot="sql" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>4.7 &amp; 4.8 The model's output</strong>
+      <span style="color:#7b8b93;font-size:14px">— the <code>%+v</code> dumps from the book's screenshots</span></p>
+    <div class="row">
+      <button class="btn" data-ch4="get">Get(1)</button>
+      <button class="btn" data-ch4="get99">Get(99)</button>
+      <button class="btn" data-ch4="latest">Latest()</button>
+      <button class="btn btn--green" data-ch4="create">POST /snippet/create → 303</button>
+    </div>
+    <div class="resp" data-ch4-slot="model" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>4.9 Transactions</strong>
+      <span style="color:#7b8b93;font-size:14px">— Begin, two statements, the second fails, Rollback</span></p>
+    <div class="row"><button class="btn btn--red" data-ch4="tx">Run the transaction</button></div>
+    <div class="resp" data-ch4-slot="tx" hidden></div>
+  </div>
+  <div class="demo__foot">
+    <span>Pages: <code>/db</code> · <code>/db/transaction</code> · <code>/snippets</code></span>
+    <a href="http://localhost:3000/snippets" target="_blank" rel="noopener">Latest() raw</a>
+  </div>
+</div>
+
+<h2 class="sec" id="ch4-takeaways">What chapter 4 leaves you with</h2>
+<table>
+  <thead><tr><th>Concept</th><th>Where it is demonstrated live</th></tr></thead>
+  <tbody>
+    <tr><td>Schema, seed data, least-privilege user</td><td><code>/db</code> — three seeded rows, expiry filtering</td></tr>
+    <tr><td><code>go.mod</code> / <code>go.sum</code>, reproducible builds</td><td>Figure 4.1; the demo pins its own deps to none</td></tr>
+    <tr><td>Connection pool, lazy connections, <code>db.Ping()</code></td><td><code>/db</code> pool panel, start-up log</td></tr>
+    <tr><td><code>models</code> package injected via <code>application</code></td><td>every <code>/snippet*</code> route</td></tr>
+    <tr><td><code>Exec()</code> + <code>LastInsertId()</code></td><td><code>INSERT</code> from the playground</td></tr>
+    <tr><td><code>QueryRow()</code> + <code>Scan()</code> + <code>ErrNoRecord</code></td><td><code>/snippet/view?id=1</code>, <code>?id=99</code></td></tr>
+    <tr><td><code>Query()</code> + <code>Next()</code> + <code>rows.Err()</code></td><td><code>/snippets</code></td></tr>
+    <tr><td>Placeholder parameters vs. SQL injection</td><td>the three playground buttons</td></tr>
+    <tr><td>Transactions and the all-or-nothing guarantee</td><td><code>/db/transaction</code></td></tr>
+  </tbody>
+</table>
+<p>Chapter 5, <em>Dynamic HTML templates</em>, starts on page 127 — where that <code>%+v</code> debugging output
+  finally becomes real HTML, and the snippet data is rendered safely into the pages from chapter 2.</p>

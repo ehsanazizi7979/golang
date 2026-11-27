@@ -1,0 +1,397 @@
+<h2 class="sec" id="ch6" style="margin-top:0">Chapter 6 — Middleware</h2>
+<h3>“Code that runs for every request”</h3>
+<p class="lead">Some behaviour belongs to no single handler: logging every request, adding security headers,
+  recovering from panics, checking a cache. Chapter 6 expresses all of it as middleware — small handlers that act
+  on a request before or after the real one — and then shows how to compose them without the nesting getting out
+  of hand.</p>
+
+<p class="note"><b>A note on the live demo.</b> The five headers below are set on real responses by a chain that
+  really executes, and <code>/middleware</code> traces every link on the way down and back up. The template pages
+  from chapter 5 now serve <em>through</em> that chain, so they carry the headers too.</p>
+
+<h2 class="sec" id="s61">6.1 · How middleware works</h2>
+<p>The book's framing: “You can think of a Go web application as a chain of <code>ServeHTTP()</code> methods being
+  called one after another.” Right now the server calls the servemux's <code>ServeHTTP()</code>, which looks up a
+  handler and calls that handler's <code>ServeHTTP()</code>. Middleware inserts another handler into that chain.</p>
+
+<p>You have already been using some: <code>http.StripPrefix()</code> from chapter 2.8 is middleware that rewrites
+  the path before passing the request to the file server.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>The standard pattern</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> myMiddleware(next http.Handler) http.Handler {
+    fn := <span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+        <span class="com">// TODO: Execute our middleware logic here...</span>
+        next.ServeHTTP(w, r)
+    }
+    <span class="kw">return</span> http.HandlerFunc(fn)
+}</pre>
+</div>
+
+<p>That is a wrapper around the next handler. <code>fn</code> is a closure over <code>next</code>, so it always has
+  access to it, and <code>http.HandlerFunc()</code> adapts the function to the <code>http.Handler</code>
+  interface. The idiom you will see most in the wild is the anonymous version:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Simplifying the middleware</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> myMiddleware(next http.Handler) http.Handler {
+    <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+        <span class="com">// TODO: Execute our middleware logic here...</span>
+        next.ServeHTTP(w, r)
+    })
+}</pre>
+</div>
+
+<h4>Position determines reach</h4>
+<p>Before the servemux, middleware acts on <em>every</em> request — right for logging:</p>
+<pre class="snippet">myMiddleware → servemux → application handler</pre>
+<p>After the servemux, by wrapping one route, it acts only on that route — right for authorization:</p>
+<pre class="snippet">servemux → myMiddleware → application handler</pre>
+
+<h2 class="sec" id="s62">6.2 · Setting security headers</h2>
+<p>Five headers, in line with current OWASP guidance, on every response:</p>
+
+<table class="tbl">
+  <thead><tr><th>Header</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>Content-Security-Policy</code></td>
+        <td>Restricts where resources may be loaded from — the main defence against XSS, clickjacking and
+            code injection. Here: fonts from <code>fonts.gstatic.com</code>, styles from
+            <code>fonts.googleapis.com</code> and self, everything else self. Inline JavaScript is blocked.</td></tr>
+    <tr><td><code>Referrer-Policy</code></td>
+        <td><code>origin-when-cross-origin</code>: the full URL for same-origin requests, but path and query
+            string stripped when navigating away.</td></tr>
+    <tr><td><code>X-Content-Type-Options</code></td>
+        <td><code>nosniff</code> — stop browsers MIME-sniffing the content type, which prevents
+            content-sniffing attacks.</td></tr>
+    <tr><td><code>X-Frame-Options</code></td>
+        <td><code>deny</code> — clickjacking protection for older browsers that don't support CSP.</td></tr>
+    <tr><td><code>X-XSS-Protection</code></td>
+        <td><code>0</code> — disable the browser's XSS filter. It used to be
+            <code>1; mode=block</code>, but alongside CSP the recommendation is now to turn it off.</td></tr>
+  </tbody>
+</table>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/middleware.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"net/http"</span>
+)
+
+<span class="kw">func</span> secureHeaders(next http.Handler) http.Handler {
+    <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+        <span class="com">// Note: This is split across multiple lines for readability. You don't </span>
+        <span class="com">// need to do this in your own code.</span>
+        w.Header().Set(<span class="str">"Content-Security-Policy"</span>,
+            <span class="str">"default-src 'self'; style-src 'self' fonts.googleapis.com; font-src fonts.gstatic.com"</span>)
+        w.Header().Set(<span class="str">"Referrer-Policy"</span>, <span class="str">"origin-when-cross-origin"</span>)
+        w.Header().Set(<span class="str">"X-Content-Type-Options"</span>, <span class="str">"nosniff"</span>)
+        w.Header().Set(<span class="str">"X-Frame-Options"</span>, <span class="str">"deny"</span>)
+        w.Header().Set(<span class="str">"X-XSS-Protection"</span>, <span class="str">"0"</span>)
+
+        next.ServeHTTP(w, r)
+    })
+}</pre>
+</div>
+
+<p>To cover every request it must wrap the servemux — which means <code>routes()</code> has to return an
+  <code>http.Handler</code> rather than <code>*http.ServeMux</code>:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/routes.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Update the signature for the routes() method so that it returns a</span>
+<span class="com">// http.Handler instead of *http.ServeMux.</span>
+<span class="kw">func</span> (app *application) routes() http.Handler {
+    mux := http.NewServeMux()
+
+    fileServer := http.FileServer(http.Dir(<span class="str">"./ui/static/"</span>))
+    mux.Handle(<span class="str">"/static/"</span>, http.StripPrefix(<span class="str">"/static"</span>, fileServer))
+
+    mux.HandleFunc(<span class="str">"/"</span>, app.home)
+    mux.HandleFunc(<span class="str">"/snippet/view"</span>, app.snippetView)
+    mux.HandleFunc(<span class="str">"/snippet/create"</span>, app.snippetCreate)
+
+    <span class="com">// Pass the servemux as the 'next' parameter to the secureHeaders middleware.</span>
+    <span class="com">// Because secureHeaders is just a function, and the function returns a</span>
+    <span class="com">// http.Handler we don't need to do anything else.</span>
+    <span class="kw">return</span> secureHeaders(mux)
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — the headers on every response</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl -I http://localhost:4000/</span>
+<span class="out">HTTP/1.1 200 OK
+Content-Security-Policy: default-src 'self'; style-src 'self' fonts.googleapis.com; font-src fonts.gstatic.com
+Referrer-Policy: origin-when-cross-origin
+X-Content-Type-Options: nosniff
+X-Frame-Options: deny
+X-Xss-Protection: 0
+Date: Sun, 06 Feb 2022 07:24:11 GMT
+Content-Type: text/html; charset=utf-8</span></pre>
+</div>
+
+<div class="note">
+  <p><b>Flow of control runs in both directions.</b> When the last handler returns, control passes back up the
+    chain in reverse:</p>
+  <pre class="snippet">secureHeaders → servemux → application handler → servemux → secureHeaders</pre>
+  <p>Code before <code>next.ServeHTTP()</code> runs on the way down; code after it — or in a deferred function —
+    runs on the way back up. <b>Live:</b> <code>/middleware</code> shows exactly this, link by link.</p>
+  <p><b>Early returns stop the chain.</b> Return before calling <code>next.ServeHTTP()</code> and nothing further
+    runs — the basis of authentication middleware:</p>
+  <pre class="snippet">if !isAuthorized(r) {
+    w.WriteHeader(http.StatusForbidden)
+    return   // chain stops here
+}
+next.ServeHTTP(w, r)</pre>
+  <p><b>Debugging CSP.</b> A strict policy blocks things you did not expect, and the browser console is where it
+    tells you. The book's own experience, and the reason to check the logs early:</p>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch6-01}}" alt="A browser developer tools console showing a Content Security Policy error: the page's settings blocked loading the Google Fonts stylesheet for Ubuntu Mono under style-src.">
+  <figcaption><b>Figure 6.1</b> — a CSP violation in the Firefox console:
+    <code>Content Security Policy: The page's settings blocked the loading of a resource at
+    https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700 ("style-src")</code>.</figcaption>
+</figure>
+
+<h2 class="sec" id="s63">6.3 · Request logging</h2>
+<p>This middleware needs the application's logger, so it is a method on <code>*application</code> — the same
+  dependency-injection pattern from chapter 3, and the same function signature as any other middleware.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/middleware.go — logRequest()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (app *application) logRequest(next http.Handler) http.Handler {
+    <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+        app.infoLog.Printf(<span class="str">"%s - %s %s %s"</span>, r.RemoteAddr, r.Proto, r.Method, r.URL.RequestURI())
+        next.ServeHTTP(w, r)
+    })
+}</pre>
+</div>
+
+<p>Added to the chain so it runs first, for every request — reading left to right:</p>
+<pre class="snippet">logRequest ↔ secureHeaders ↔ servemux ↔ application handler</pre>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/routes.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Wrap the existing chain with the logRequest middleware.</span>
+<span class="kw">return</span> app.logRequest(secureHeaders(mux))</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — one line per request</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go run ./cmd/web</span>
+<span class="out">INFO    2022/02/06 09:08:29 Starting server on :4000
+INFO    2022/02/06 09:08:31 127.0.0.1:45988 - HTTP/1.1 GET /
+INFO    2022/02/06 09:08:31 127.0.0.1:45988 - HTTP/1.1 GET /static/css/main.css
+INFO    2022/02/06 09:08:31 127.0.0.1:45988 - HTTP/1.1 GET /static/js/main.js
+INFO    2022/02/06 09:08:31 127.0.0.1:45988 - HTTP/1.1 GET /static/img/logo.png
+INFO    2022/02/06 09:08:34 127.0.0.1:45988 - HTTP/1.1 GET /snippet/view?id=2</span></pre>
+</div>
+
+<p class="note"><b>Live:</b> request <code>/newsnippets</code> and the line appears in the
+  <a href="/logs">log stream</a> — the demo prints it through the same <code>infoLog</code>. Note that
+  <code>r.URL.RequestURI()</code> includes the query string, which is why the last line shows
+  <code>?id=2</code>.</p>
+
+<h2 class="sec" id="s64">6.4 · Panic recovery</h2>
+<p>A panic in a plain Go program terminates it. Go's HTTP server is more careful: the panic is isolated to the
+  goroutine serving that request. The server logs a stack trace, unwinds that goroutine (running deferred
+  functions), and closes the HTTP connection — the server survives.</p>
+
+<p>But look at what the user gets. Add <code>panic("oops! something went wrong")</code> to the home handler and:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — an empty reply</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl -i http://localhost:4000</span>
+<span class="out">curl: (52) Empty reply from server</span></pre>
+</div>
+
+<p>No status, no body, no explanation. The fix uses the fact that <b>deferred functions always run while the stack
+  unwinds</b>:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/middleware.go — recoverPanic()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (app *application) recoverPanic(next http.Handler) http.Handler {
+    <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+        <span class="com">// Create a deferred function (which will always be run in the event</span>
+        <span class="com">// of a panic as Go unwinds the stack).</span>
+        <span class="kw">defer</span> <span class="kw">func</span>() {
+            <span class="com">// Use the builtin recover function to check if there has been a</span>
+            <span class="com">// panic or not. If there has...</span>
+            <span class="kw">if</span> err := recover(); err != <span class="kw">nil</span> {
+                <span class="com">// Set a "Connection: close" header on the response.</span>
+                w.Header().Set(<span class="str">"Connection"</span>, <span class="str">"close"</span>)
+                <span class="com">// Call the app.serverError helper method to return a 500</span>
+                <span class="com">// Internal Server response.</span>
+                app.serverError(w, fmt.Errorf(<span class="str">"%s"</span>, err))
+            }
+        }()
+
+        next.ServeHTTP(w, r)
+    })
+}</pre>
+</div>
+
+<div class="note">
+  <p><b>Two details worth knowing.</b> <code>Connection: close</code> makes Go's server close the connection
+    after the response and tells the client that is going to happen (over HTTP/2 Go strips it and sends a
+    <code>GOAWAY</code> frame instead, so the response stays well-formed). And the value returned by
+    <code>recover()</code> has type <code>any</code> — it is whatever was passed to <code>panic()</code>, a
+    string, an error, or anything else — so the book normalises it with
+    <code>fmt.Errorf("%s", err)</code> before handing it to <code>serverError()</code>.</p>
+</div>
+
+<p>It goes first in the chain, so it covers panics in all the middleware and handlers after it:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/routes.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Wrap the existing chain with the recoverPanic middleware.</span>
+<span class="kw">return</span> app.recoverPanic(app.logRequest(secureHeaders(mux)))</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — a proper 500, with the headers intact</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl -i http://localhost:4000</span>
+<span class="out">HTTP/1.1 500 Internal Server Error
+Connection: close
+Content-Security-Policy: default-src 'self'; style-src 'self' fonts.googleapis.com; font-src fonts.gstatic.com
+Content-Type: text/plain; charset=utf-8
+Referrer-Policy: origin-when-cross-origin
+X-Content-Type-Options: nosniff
+X-Frame-Options: deny
+X-Xss-Protection: 0
+Content-Length: 22
+
+Internal Server Error</span></pre>
+</div>
+
+<p><b>Live:</b> <code>/middleware/panic</code> runs both versions. Without the middleware: an empty reply and no
+  trace at all. With it: <code>500</code>, <code>Connection: close</code>, all five security headers, and the
+  chain's events including <code>recoverPanic(recovered)</code>.</p>
+
+<div class="note">
+  <p><b>Panics in other goroutines are not recovered.</b> The middleware only recovers in its own goroutine. Spin
+    up a background goroutine and a panic there is caught neither by <code>recoverPanic()</code> nor by the
+    server — the whole process exits. Recover inside it yourself:</p>
+  <pre class="snippet">go func() {
+    defer func() {
+        if err := recover(); err != nil {
+            log.Print(fmt.Errorf("%s\n%s", err, debug.Stack()))
+        }
+    }()
+    doSomeBackgroundProcessing()
+}()</pre>
+</div>
+
+<h2 class="sec" id="s65">6.5 · Composable middleware chains</h2>
+<p><code>justinas/alice</code> turns nested wrapping into a list. This:</p>
+<pre class="snippet">return myMiddleware1(myMiddleware2(myMiddleware3(myHandler)))</pre>
+<p>becomes this:</p>
+<pre class="snippet">return alice.New(myMiddleware1, myMiddleware2, myMiddleware3).Then(myHandler)</pre>
+<p>And because a chain is a value, it can be named, extended and reused — which is the real payoff as routes
+  multiply:</p>
+<pre class="snippet">myChain := alice.New(myMiddlewareOne, myMiddlewareTwo)
+myOtherChain := myChain.Append(myMiddleware3)
+return myOtherChain.Then(myHandler)</pre>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal, then go.mod</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go get github.com/justinas/alice@v1</span>
+<span class="out">go: downloading github.com/justinas/alice v1.2.0</span></pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: go.mod</span><span class="lang">go.mod</span></div>
+  <pre class="code">module snippetbox.alexedwards.net
+
+go 1.20
+
+require (
+    github.com/go-sql-driver/mysql v1.7.0
+    github.com/justinas/alice v1.2.0
+)</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/routes.go — the finished chain</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"net/http"</span>
+
+    <span class="str">"github.com/justinas/alice"</span> <span class="com">// New import</span>
+)
+
+<span class="kw">func</span> (app *application) routes() http.Handler {
+    mux := http.NewServeMux()
+
+    fileServer := http.FileServer(http.Dir(<span class="str">"./ui/static/"</span>))
+    mux.Handle(<span class="str">"/static/"</span>, http.StripPrefix(<span class="str">"/static"</span>, fileServer))
+
+    mux.HandleFunc(<span class="str">"/"</span>, app.home)
+    mux.HandleFunc(<span class="str">"/snippet/view"</span>, app.snippetView)
+    mux.HandleFunc(<span class="str">"/snippet/create"</span>, app.snippetCreate)
+
+    <span class="com">// Create a middleware chain containing our 'standard' middleware</span>
+    <span class="com">// which will be used for every request our application receives.</span>
+    standard := alice.New(app.recoverPanic, app.logRequest, secureHeaders)
+
+    <span class="com">// Return the 'standard' middleware chain followed by the servemux.</span>
+    <span class="kw">return</span> standard.Then(mux)
+}</pre>
+</div>
+
+<p class="note"><b>Order matters, and it is not symmetric.</b> <code>alice.New(a, b, c).Then(h)</code> equals
+  <code>a(b(c(h)))</code>: <code>a</code> is outermost, so it sees the request first and the response last.
+  That is why <code>recoverPanic</code> leads — it has to wrap the others to recover their panics.
+  <b>Live:</b> <code>/middleware/alice</code> shows the equivalence, and <code>/middleware</code> runs this exact
+  chain.</p>
+
+<h2 class="sec" id="ch6-demo">Chapter 6, running live</h2>
+
+<div class="demo">
+  <div class="demo__head">
+    <h3>Chapter 6 controls</h3>
+    <span class="live"><i></i><span id="ch6State">connecting…</span></span>
+    <a class="btn" href="http://localhost:3000/middleware" target="_blank" rel="noopener" style="margin-left:auto">Open the chain page ↗</a>
+  </div>
+  <div class="demo__body">
+    <p style="margin:0 0 10px"><strong>6.1–6.2 The chain, and its headers</strong>
+      <span style="color:#7b8b93;font-size:14px">— every link reports itself, both directions</span></p>
+    <div class="row">
+      <button class="btn btn--green" data-ch6="trace">Execute the chain</button>
+      <button class="btn" data-ch6="headers">XHR /newsnippets</button>
+    </div>
+    <div class="resp" data-ch6-slot="chain" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>6.4 Panic recovery</strong>
+      <span style="color:#7b8b93;font-size:14px">— empty reply vs. a proper 500</span></p>
+    <div class="row"><button class="btn btn--red" data-ch6="panic">panic("oops! something went wrong")</button></div>
+    <div class="resp" data-ch6-slot="panic" hidden></div>
+  </div>
+  <div class="demo__foot">
+    <span>Pages: <code>/middleware</code> · <code>/middleware/panic</code> · <code>/middleware/alice</code></span>
+    <a href="http://localhost:3000/logs" target="_blank" rel="noopener">Live log</a>
+  </div>
+</div>
+
+<h2 class="sec" id="ch6-takeaways">What chapter 6 leaves you with</h2>
+<table>
+  <thead><tr><th>Concept</th><th>Where it is demonstrated live</th></tr></thead>
+  <tbody>
+    <tr><td>The <code>func(next http.Handler) http.Handler</code> pattern</td><td><code>/middleware</code> trace</td></tr>
+    <tr><td>Position decides reach: before vs. after the servemux</td><td>chain diagram; headers on every page</td></tr>
+    <tr><td>Five OWASP security headers</td><td><code>curl -I /newsnippets</code></td></tr>
+    <tr><td>Control flows back up the chain</td><td>the up/down events in the trace</td></tr>
+    <tr><td>Request logging via the injected <code>infoLog</code></td><td><code>/logs</code></td></tr>
+    <tr><td>Panic recovery, <code>Connection: close</code>, <code>any</code> → error</td><td><code>/middleware/panic</code></td></tr>
+    <tr><td><code>alice.New(...).Then(mux)</code> and named chains</td><td><code>/middleware/alice</code></td></tr>
+  </tbody>
+</table>
+<p>Chapter 7, <em>Advanced routing</em>, starts on page 180 — clean URLs with <code>httprouter</code>, and the
+  method-based routing that turns <code>/snippet/view/:id</code> into a real route.</p>

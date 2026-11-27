@@ -1,0 +1,307 @@
+<h2 class="sec" id="ch7" style="margin-top:0">Chapter 7 — Advanced routing</h2>
+<h3>“Method-based routing and clean URLs”</h3>
+<p class="lead">Chapter 8 needs one route to do two different jobs depending on the method, and it needs URLs like
+  <code>/snippet/view/123</code> instead of <code>?id=123</code>. Go's <code>ServeMux</code> can do neither. So
+  chapter 7 replaces it with a third-party router — and shows what that buys, and what it costs.</p>
+
+<p class="note"><b>A note on the live demo.</b> <code>/clean</code> is the same application running on a working
+  implementation of <code>julienschmidt/httprouter</code>: named parameters, catch-alls, automatic
+  <code>OPTIONS</code>, <code>Allow</code> headers on 405s, custom 404 and 405 handlers, and conflicting patterns
+  rejected at registration. The rest of this server still runs on the chapter-2 <code>ServeMux</code>, so the two
+  can be compared.</p>
+
+<p>The target route table for this chapter — and the shape chapter 8 builds on:</p>
+
+<table class="tbl">
+  <thead><tr><th>Method</th><th>Pattern</th><th>Handler</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td><code>GET</code></td><td><code>/</code></td><td><code>home</code></td><td>Display the home page</td></tr>
+    <tr><td><code>GET</code></td><td><code>/snippet/view/:id</code></td><td><code>snippetView</code></td><td>Display a specific snippet</td></tr>
+    <tr><td><code>GET</code></td><td><code>/snippet/create</code></td><td><code>snippetCreate</code></td><td>Display the HTML form</td></tr>
+    <tr><td><code>POST</code></td><td><code>/snippet/create</code></td><td><code>snippetCreatePost</code></td><td>Create a new snippet</td></tr>
+    <tr><td><code>GET</code></td><td><code>/static/*filepath</code></td><td><code>http.FileServer</code></td><td>Serve a static file</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec" id="s71">7.1 · Choosing a router</h2>
+<p>There are hundreds of third-party routers, and they all work slightly differently — different APIs, different
+  matching logic, different quirks. The book recommends three as a starting point: <code>julienschmidt/httprouter</code>,
+  <code>go-chi/chi</code> and <code>gorilla/mux</code>. All three support method-based routing and clean URLs, and
+  all three work with the handler and middleware patterns the book has been using.</p>
+
+<table class="tbl">
+  <thead><tr><th>Router</th><th>Strengths</th><th>Weaknesses</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>julienschmidt/httprouter</code></td>
+      <td>The most focused, lightweight and fastest of the three; closest to “perfect” on HTTP spec compliance. Handles
+          <code>OPTIONS</code> automatically, sends 405s correctly, and lets you set custom 404 and 405 handlers.</td>
+      <td>No regexp patterns, no route grouping.</td>
+    </tr>
+    <tr>
+      <td><code>go-chi/chi</code></td>
+      <td>Similar feature set, plus regexp route patterns and <em>grouping</em> of routes that share middleware —
+          valuable in larger applications.</td>
+      <td>Doesn't handle <code>OPTIONS</code> automatically, and doesn't set an <code>Allow</code> header on 405s.</td>
+    </tr>
+    <tr>
+      <td><code>gorilla/mux</code></td>
+      <td>The most full-featured: regexp patterns, routing by scheme, host and headers, and the only one with custom
+          routing rules and route reversing (as in Django, Rails or Laravel).</td>
+      <td>No longer actively maintained (archived). Comparatively slow and memory-hungry, and like chi it doesn't
+          handle <code>OPTIONS</code> or set <code>Allow</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>For a small application needing only method-based routing and clean URLs, the book picks
+  <code>httprouter</code> “for the sake of performance and correctness”.</p>
+
+<p class="note"><b>On <code>gorilla/mux</code> being archived.</b> That doesn't automatically make it a bad choice:
+  the code is stable and battle-hardened, and the Go compatibility promise means it will keep compiling. What you
+  lose is bug fixes.</p>
+
+<h2 class="sec" id="s72">7.2 · Clean URLs and method-based routing</h2>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go get github.com/julienschmidt/httprouter@v1</span>
+<span class="out">go: downloading github.com/julienschmidt/httprouter v1.3.0</span></pre>
+</div>
+
+<p>The syntax in one line:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>The core pattern</span><span class="lang">go</span></div>
+  <pre class="code">router := httprouter.New()
+router.HandlerFunc(http.MethodGet, <span class="str">"/snippet/view/:id"</span>, app.snippetView)</pre>
+</div>
+
+<ul>
+  <li>The first argument is the method the request must have — <code>http.MethodGet</code>, not the string
+      <code>"GET"</code>.</li>
+  <li>The second is a pattern. <code>:name</code> is a named parameter matching <b>one</b> path segment, so
+      <code>/snippet/view/123</code> and <code>/snippet/view/foo</code> both match
+      <code>/snippet/view/:id</code>, but <code>/snippet/bar</code> and <code>/snippet/view/foo/baz</code> do not.</li>
+  <li><code>*name</code> is a catch-all matching <em>everything</em>, only allowed at the end of a pattern —
+      <code>/static/*filepath</code>.</li>
+  <li>The pattern <code>/</code> matches only a path of exactly <code>/</code>.</li>
+  <li><code>Handler()</code> takes an <code>http.Handler</code> rather than a function — which is how the static
+      file server is registered.</li>
+</ul>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/routes.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (app *application) routes() http.Handler {
+    <span class="com">// Initialize the router.</span>
+    router := httprouter.New()
+
+    <span class="com">// Update the pattern for the route for the static files.</span>
+    fileServer := http.FileServer(http.Dir(<span class="str">"./ui/static/"</span>))
+    router.Handler(http.MethodGet, <span class="str">"/static/*filepath"</span>, http.StripPrefix(<span class="str">"/static"</span>, fileServer))
+
+    <span class="com">// And then create the routes using the appropriate methods, patterns and </span>
+    <span class="com">// handlers.</span>
+    router.HandlerFunc(http.MethodGet, <span class="str">"/"</span>, app.home)
+    router.HandlerFunc(http.MethodGet, <span class="str">"/snippet/view/:id"</span>, app.snippetView)
+    router.HandlerFunc(http.MethodGet, <span class="str">"/snippet/create"</span>, app.snippetCreate)
+    router.HandlerFunc(http.MethodPost, <span class="str">"/snippet/create"</span>, app.snippetCreatePost)
+
+    <span class="com">// Create the middleware chain as normal.</span>
+    standard := alice.New(app.recoverPanic, app.logRequest, secureHeaders)
+
+    <span class="com">// Wrap the router with the middleware and return it as normal.</span>
+    <span class="kw">return</span> standard.Then(router)
+}</pre>
+</div>
+
+<p>The handlers change in three ways. The <code>id</code> is read from the request context rather than the query
+  string; the manual method check in the create handler disappears, because httprouter does it; and the redirect
+  uses the new URL shape.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — snippetView()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Because httprouter matches the "/" path exactly, we can now remove the</span>
+<span class="com">// manual check of r.URL.Path != "/" from this handler.</span>
+
+<span class="com">// When httprouter is parsing a request, the values of any named parameters</span>
+<span class="com">// will be stored in the request context. We'll talk about request context</span>
+<span class="com">// in detail later in the book, but for now it's enough to know that you can</span>
+<span class="com">// use the ParamsFromContext() function to retrieve a slice containing these</span>
+<span class="com">// parameter names and values like so:</span>
+params := httprouter.ParamsFromContext(r.Context())
+
+<span class="com">// We can then use the ByName() method to get the value of the "id" named</span>
+<span class="com">// parameter from the slice and validate it as normal.</span>
+id, err := strconv.Atoi(params.ByName(<span class="str">"id"</span>))</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — the two create handlers</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Add a new snippetCreate handler, which for now returns a placeholder</span>
+<span class="com">// response. We'll update this shortly to show a HTML form.</span>
+<span class="kw">func</span> (app *application) snippetCreate(w http.ResponseWriter, r *http.Request) {
+    w.Write([]<span class="kw">byte</span>(<span class="str">"Display the form for creating a new snippet..."</span>))
+}
+
+<span class="com">// Rename this handler to snippetCreatePost.</span>
+<span class="kw">func</span> (app *application) snippetCreatePost(w http.ResponseWriter, r *http.Request) {
+    <span class="com">// Checking if the request method is a POST is now superfluous and can be</span>
+    <span class="com">// removed, because this is done automatically by httprouter.</span>
+    title := <span class="str">"O snail"</span>
+    content := <span class="str">"O snail\nClimb Mount Fuji,\nBut slowly, slowly!\n\n– Kobayashi Issa"</span>
+    expires := 7
+
+    id, err := app.snippets.Insert(title, content, expires)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        app.serverError(w, err)
+        <span class="kw">return</span>
+    }
+
+    <span class="com">// Update the redirect path to use the new clean URL format.</span>
+    http.Redirect(w, r, fmt.Sprintf(<span class="str">"/snippet/view/%d"</span>, id), http.StatusSeeOther)
+}</pre>
+</div>
+
+<p>The home template's links follow suit — <code>/snippet/view/{{.ID}}</code> rather than
+  <code>?id={{.ID}}</code>:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/home.tmpl</span><span class="lang">tmpl</span></div>
+  <pre class="code">{{range .Snippets}}
+&lt;tr&gt;
+    &lt;!-- Use the new clean URL style--&gt;
+    &lt;td&gt;&lt;a href='/snippet/view/{{.ID}}'&gt;{{.Title}}&lt;/a&gt;&lt;/td&gt;
+    &lt;td&gt;{{humanDate .Created}}&lt;/td&gt;
+    &lt;td&gt;#{{.ID}}&lt;/td&gt;
+&lt;/tr&gt;
+{{end}}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch7-01}}" alt="The snippet view page at localhost:4000/snippet/view/1, showing the An old silent pond haiku with its created and expires dates.">
+  <figcaption><b>Figure 7.1</b> — the same page as figure 5.9, at a different URL:
+    <code>/snippet/view/1</code> instead of <code>/snippet/view?id=1</code>. Nothing else changed.</figcaption>
+</figure>
+
+<p>Now an unsupported method gets a proper 405, with an <code>Allow</code> header listing what <em>would</em>
+  work — httprouter's doing, and one of the reasons the book prefers it:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — the 405 and its Allow header</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl -i -X POST http://localhost:4000/snippet/view/1</span>
+<span class="out">HTTP/1.1 405 Method Not Allowed
+Allow: GET, OPTIONS
+Content-Security-Policy: default-src 'self'; style-src 'self' fonts.googleapis.com; font-src fonts.gstatic.com
+Content-Type: text/plain; charset=utf-8
+Referrer-Policy: origin-when-cross-origin
+X-Content-Type-Options: nosniff
+X-Frame-Options: deny
+X-Xss-Protection: 0
+Content-Length: 19
+
+Method Not Allowed</span></pre>
+</div>
+
+<h4>Custom error handlers</h4>
+<p>Two 404s, two different bodies. <code>/snippet/view/99</code> has no such record, so it calls
+  <code>app.notFound()</code>; <code>/missing</code> has no such route, so httprouter answers it itself:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — the discrepancy</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl http://localhost:4000/snippet/view/99</span>
+<span class="out">Not Found</span>
+<span class="prompt">$ curl http://localhost:4000/missing</span>
+<span class="out">404 page not found</span></pre>
+</div>
+
+<p>httprouter makes the fix a one-liner — and the same field exists for 405s:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/routes.go</span><span class="lang">go</span></div>
+  <pre class="code">router := httprouter.New()
+
+<span class="com">// Create a handler function which wraps our notFound() helper, and then</span>
+<span class="com">// assign it as the custom handler for 404 Not Found responses. You can also</span>
+<span class="com">// set a custom handler for 405 Method Not Allowed responses by setting</span>
+<span class="com">// router.MethodNotAllowed in the same way too.</span>
+router.NotFound = http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+    app.notFound(w)
+})</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — consistent again</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl http://localhost:4000/snippet/view/99</span>
+<span class="out">Not Found</span>
+<span class="prompt">$ curl http://localhost:4000/missing</span>
+<span class="out">Not Found</span></pre>
+</div>
+
+<div class="note">
+  <p><b>Conflicting route patterns are rejected.</b> httprouter refuses two patterns that could match the same
+    request — <code>GET /foo/new</code> alongside <code>GET /foo/:name</code> or <code>GET /foo/*name</code>. That
+    is usually a good thing: with no conflicts there are no routing-priority rules to reason about. If you genuinely
+    need conflicting routes (replicating an existing application's endpoints, say), use chi or gorilla/mux.</p>
+  <p><b>Customising behaviour.</b> httprouter also offers trailing-slash redirects and automatic path cleaning.</p>
+  <p><b>Why not RESTful URLs?</b> <code>GET /snippets/:id</code> and <code>GET /snippets/new</code> conflict — a
+    request to <code>/snippets/new</code> matches both, with <code>id</code> set to <code>"new"</code>. And the form
+    at <code>/snippets/new</code> would have to post to <code>/snippets</code>, so re-rendering it after a validation
+    error would change the URL in the user's address bar. Not fatal — but clunky.</p>
+  <p><b>Handler naming.</b> There is no right or wrong convention in Go. This project postfixes POST handlers with
+    <code>Post</code>: <code>snippetCreate</code> and <code>snippetCreatePost</code>.</p>
+</div>
+
+<h2 class="sec" id="ch7-demo">Chapter 7, running live</h2>
+<p>The routes below are served by an httprouter, not by the chapter-2 ServeMux — same handlers, different
+  dispatch.</p>
+
+<div class="demo">
+  <div class="demo__head">
+    <h3>Chapter 7 controls</h3>
+    <span class="live"><i></i><span id="ch7State">connecting…</span></span>
+    <a class="btn" href="http://localhost:3000/router" target="_blank" rel="noopener" style="margin-left:auto">Open the router page ↗</a>
+  </div>
+  <div class="demo__body">
+    <p style="margin:0 0 10px"><strong>7.2 Clean URLs and method-based routing</strong>
+      <span style="color:#7b8b93;font-size:14px">— the real matcher, answering for real routes</span></p>
+    <div class="row">
+      <button class="btn btn--green" data-ch7="view">GET /clean/snippet/view/1</button>
+      <button class="btn" data-ch7="wrongmethod">POST the same path (405)</button>
+      <button class="btn" data-ch7="missing">Path that matches nothing (404)</button>
+      <button class="btn" data-ch7="create">POST /clean/snippet/create (303)</button>
+    </div>
+    <div class="resp" data-ch7-slot="routing" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>Probe the matcher</strong>
+      <span style="color:#7b8b93;font-size:14px">— ask what a method + path would resolve to</span></p>
+    <div class="row">
+      <button class="btn" data-ch7="probe1">GET /snippet/view/1</button>
+      <button class="btn" data-ch7="probe2">GET /snippet/view/abc</button>
+      <button class="btn" data-ch7="probe3">GET /snippet/view/1/extra</button>
+      <button class="btn" data-ch7="probe4">POST /snippet/create</button>
+    </div>
+    <div class="resp" data-ch7-slot="probe" hidden></div>
+  </div>
+  <div class="demo__foot">
+    <span>Pages: <code>/router</code> · <code>/clean</code> · <code>/clean/snippet/view/1</code></span>
+    <a href="http://localhost:3000/router" target="_blank" rel="noopener">Route table</a>
+  </div>
+</div>
+
+<h2 class="sec" id="ch7-takeaways">What chapter 7 leaves you with</h2>
+<table>
+  <thead><tr><th>Concept</th><th>Where it is demonstrated live</th></tr></thead>
+  <tbody>
+    <tr><td>Named parameters <code>:id</code> and catch-alls <code>*filepath</code></td><td><code>/router</code> route table; the probe</td></tr>
+    <tr><td>Method-based routing on one pattern</td><td><code>GET</code> vs <code>POST</code> on <code>/snippet/create</code></td></tr>
+    <tr><td>Clean URLs</td><td><code>/clean/snippet/view/1</code></td></tr>
+    <tr><td>Automatic 405 with <code>Allow: GET, OPTIONS</code></td><td>the wrong-method button</td></tr>
+    <tr><td>Custom <code>NotFound</code> and <code>MethodNotAllowed</code></td><td><code>/clean/missing</code> returns the same body as <code>/clean/snippet/view/99</code></td></tr>
+    <tr><td>Conflicting patterns rejected at registration</td><td>the playground's error on a duplicate route</td></tr>
+  </tbody>
+</table>
+<p>Chapter 8, <em>Processing forms</em>, starts on page 193 — where <code>GET /snippet/create</code> finally renders
+  a real form, and <code>POST</code> validates and stores what the user typed.</p>

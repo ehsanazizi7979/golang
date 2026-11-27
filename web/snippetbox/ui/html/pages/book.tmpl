@@ -1,0 +1,23 @@
+{{define "title"}}Let's Go{{end}}
+
+{{define "main"}}
+    <h2>Building Snippetbox</h2>
+    <p class="lede">A working re-implementation of the application built in <em>Let's Go</em>, chapter 2.
+       This page is rendered by the same <code>base</code>, <code>nav</code> and <code>main</code>
+       templates the book builds in section 2.7.</p>
+
+    <ul class="snippet-list">
+        <li><a href="/home">Home page</a>
+            <span class="meta">base.tmpl + nav.tmpl + pages/home.tmpl &middot; section 2.7</span></li>
+        <li><a href="/snippet/view?id=123">/snippet/view?id=123</a>
+            <span class="meta">query string parsing with strconv.Atoi &middot; section 2.5</span></li>
+        <li><a href="/snippet/create">/snippet/create</a>
+            <span class="meta">POST-only route, 405 + Allow: POST &middot; section 2.4</span></li>
+        <li><a href="/static/">/static/</a>
+            <span class="meta">http.FileServer behind http.StripPrefix &middot; section 2.8</span></li>
+        <li><a href="/templates">Templates</a>
+            <span class="meta">the files from section 2.7, rendered side by side</span></li>
+        <li><a href="/summary">Chapter 1 &amp; 2 summary</a>
+            <span class="meta">the HTML write-up with every figure and code sample</span></li>
+    </ul>
+{{end}}
