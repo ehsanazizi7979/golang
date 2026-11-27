@@ -1,0 +1,632 @@
+<h2 class="sec" id="ch5" style="margin-top:0">Chapter 5 — Dynamic HTML templates</h2>
+<h3>“From struct dumps to real pages”</h3>
+<p class="lead">Chapter 4 could show you a snippet. Chapter 5 makes it look like something a person would use:
+  one holding structure for dynamic data, the actions and functions that control what gets rendered, a template
+  cache so pages aren't re-parsed on every request, a render helper that fails safely, common data on every page,
+  and custom functions for formatting.</p>
+
+<p class="note"><b>A note on the live demo.</b> The pages at <code>/newsnippets</code> and
+  <code>/newsnippets/view?id=1</code> are rendered by the same <code>base.tmpl</code>, <code>nav.tmpl</code>,
+  <code>home.tmpl</code> and <code>view.tmpl</code> files the book writes, through a working implementation of
+  <code>html/template</code> (dot, <code>with</code>/<code>if</code>/<code>range</code>, pipelines, template
+  variables, <code>FuncMap</code>, and context-aware escaping). Nothing about the markup below is a mock-up.</p>
+
+<h2 class="sec" id="s51">5.1 · Displaying dynamic data</h2>
+<p>In chapter 4, <code>snippetView</code> ended with <code>fmt.Fprintf(w, "%+v", snippet)</code> — a debugging
+  dump. The first step is to hand that data to a template instead. A template set is base layout + partials +
+  page, parsed together with <code>template.ParseFiles()</code> and executed by name.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — snippetView()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Initialize a slice containing the paths to the view.tmpl file,</span>
+<span class="com">// plus the base layout and navigation partial that we made earlier.</span>
+files := []<span class="kw">string</span>{
+    <span class="str">"./ui/html/base.tmpl"</span>,
+    <span class="str">"./ui/html/partials/nav.tmpl"</span>,
+    <span class="str">"./ui/html/pages/view.tmpl"</span>,
+}
+
+<span class="com">// Parse the template files...</span>
+ts, err := template.ParseFiles(files...)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    app.serverError(w, err)
+    <span class="kw">return</span>
+}
+
+<span class="com">// And then execute them. Notice how we are passing in the snippet</span>
+<span class="com">// data (a models.Snippet struct) as the final parameter?</span>
+err = ts.ExecuteTemplate(w, <span class="str">"base"</span>, snippet)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    app.serverError(w, err)
+}</pre>
+</div>
+
+<p>Any dynamic data you pass in is represented inside the template by <strong>dot</strong> (a single
+  <code>.</code>). When dot's underlying type is a struct, you yield any exported field by postfixing dot with the
+  field name — <code>{{.Title}}</code>.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/view.tmpl</span><span class="lang">tmpl</span></div>
+  <pre class="code">{{define "title"}}Snippet #{{.ID}}{{end}}
+
+{{define "main"}}
+    &lt;div class='snippet'&gt;
+        &lt;div class='metadata'&gt;
+            &lt;strong&gt;{{.Title}}&lt;/strong&gt;
+            &lt;span&gt;#{{.ID}}&lt;/span&gt;
+        &lt;/div&gt;
+        &lt;pre&gt;&lt;code&gt;{{.Content}}&lt;/code&gt;&lt;/pre&gt;
+        &lt;div class='metadata'&gt;
+            &lt;time&gt;Created: {{.Created}}&lt;/time&gt;
+            &lt;time&gt;Expires: {{.Expires}}&lt;/time&gt;
+        &lt;/div&gt;
+    &lt;/div&gt;
+{{end}}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-01}}" alt="A wireframe of the snippet view page: Snippetbox header, Home navigation, and a snippet box with title, body lines, created and expires dates.">
+  <figcaption><b>Figure 5.1</b> — the page we're aiming at: header, nav, one snippet with its title, body, and
+    two timestamps.</figcaption>
+</figure>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-02}}" alt="The rendered snippet view page in a browser at localhost:4000/snippet/view?id=1, showing the An old silent pond haiku with created and expires timestamps.">
+  <figcaption><b>Figure 5.2</b> — the real thing. The haiku, the title, the two dates, all coming from
+    <code>&#123;{.Title}}&#123;</code>, <code>&#123;{.Content}}&#123;</code> and so on.</figcaption>
+</figure>
+
+<h4>Rendering multiple pieces of data</h4>
+<p><code>html/template</code> lets you pass <em>one</em> — and only one — item of dynamic data. Real pages need
+  several. The lightweight, type-safe answer is a struct that acts as a single holding structure: a
+  <code>templateData</code> type.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/templates.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> <span class="str">"snippetbox.alexedwards.net/internal/models"</span>
+
+<span class="com">// Define a templateData type to act as the holding structure for</span>
+<span class="com">// any dynamic data that we want to pass to our HTML templates.</span>
+<span class="com">// At the moment it only contains one field, but we'll add more</span>
+<span class="com">// to it as the build progresses.</span>
+<span class="kw">type</span> templateData <span class="kw">struct</span> {
+    Snippet *models.Snippet
+}</pre>
+</div>
+
+<p>Now the template must chain the field names: <code>{{.Snippet.Title}}</code> rather than
+  <code>{{.Title}}</code>. Section 5.2's <code>{{with}}</code> action removes that repetition again.</p>
+
+<div class="note">
+  <p><b>Additional information: dynamic content escaping.</b> <code>html/template</code> automatically escapes
+    anything yielded between <code>{{ }}</code> tags — which is exactly why you use it instead of
+    <code>text/template</code>. A value of:</p>
+  <pre class="snippet">&lt;span&gt;{{"&lt;script&gt;alert('xss attack')&lt;/script&gt;"}}&lt;/span&gt;</pre>
+  <p>is rendered harmlessly as:</p>
+  <pre class="snippet">&lt;span&gt;&amp;lt;script&amp;gt;alert(&amp;#39;xss attack&amp;#39;)&amp;lt;/script&amp;gt;&lt;/span&gt;</pre>
+  <p>The escaping is <em>context-dependent</em>: Go uses different escapes depending on whether the value lands
+    in HTML text, an attribute, CSS, JavaScript or a URI. <b>Live:</b> <code>/tplx/escape</code> renders the same
+    payload through both packages so you can see the difference.</p>
+  <p><b>Nested templates.</b> When invoking one template from another, dot must be passed explicitly —
+    <code>{{template "main" .}}</code>, not <code>{{template "main"}}</code>. Get in the habit of always
+    pipelining it. <b>Calling methods.</b> Fields with methods can call them, one return value only:
+    <code>{{.Snippet.Created.Weekday}}</code>, and with arguments, space-separated and unparenthesised:
+    <code>{{.Snippet.Created.AddDate 0 6 0}}</code>. <b>Comments.</b> <code>html/template</code> strips
+    <em>all</em> HTML comments, including conditional comments, because it cannot reliably predict how a browser
+    would interpret them.</p>
+</div>
+
+<h2 class="sec" id="s52">5.2 · Template actions and functions</h2>
+<p>Three actions control the display of data, and all three change what dot means inside their block:</p>
+
+<table class="tbl">
+  <thead><tr><th>Action</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>{{if .Foo}} C1 {{else}} C2 {{end}}</code></td>
+        <td>Render C1 if <code>.Foo</code> is not empty, otherwise C2.</td></tr>
+    <tr><td><code>{{with .Foo}} C1 {{else}} C2 {{end}}</code></td>
+        <td>If <code>.Foo</code> is not empty, set dot to <code>.Foo</code> and render C1, otherwise C2.</td></tr>
+    <tr><td><code>{{range .Foo}} C1 {{else}} C2 {{end}}</code></td>
+        <td>If <code>.Foo</code> has length, loop over it setting dot to each element and render C1; if empty,
+            render C2.</td></tr>
+  </tbody>
+</table>
+
+<p><code>{{else}}</code> is optional in all three. The empty values are <code>false</code>, <code>0</code>, any
+  nil pointer or interface, and any array, slice, map or string of length zero. And the crucial point: <b>with and
+  range change dot</b>, so what dot refers to depends on where you are in the template.</p>
+
+<p>The most useful functions: <code>eq</code>, <code>ne</code>, <code>not</code>, <code>or</code>,
+  <code>index</code>, <code>printf</code>, <code>len</code>, and template variables like
+  <code>{{$bar := len .Foo}}</code> (a dollar prefix, alphanumeric only).</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/view.tmpl — with</span><span class="lang">tmpl</span></div>
+  <pre class="code">{{define "title"}}Snippet #{{.Snippet.ID}}{{end}}
+
+{{define "main"}}
+    {{with .Snippet}}
+    &lt;div class='snippet'&gt;
+        &lt;div class='metadata'&gt;
+            &lt;strong&gt;{{.Title}}&lt;/strong&gt;
+            &lt;span&gt;#{{.ID}}&lt;/span&gt;
+        &lt;/div&gt;
+        &lt;pre&gt;&lt;code&gt;{{.Content}}&lt;/code&gt;&lt;/pre&gt;
+        &lt;div class='metadata'&gt;
+            &lt;time&gt;Created: {{.Created}}&lt;/time&gt;
+            &lt;time&gt;Expires: {{.Expires}}&lt;/time&gt;
+        &lt;/div&gt;
+    &lt;/div&gt;
+    {{end}}
+{{end}}</pre>
+</div>
+
+<p>Between <code>{{with .Snippet}}</code> and its <code>{{end}}</code>, dot <em>is</em> the snippet, so the inner
+  fields need no prefix. Then the home page gets a table, with <code>{{if}}</code> for the empty case and
+  <code>{{range}}</code> for the rows:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/home.tmpl</span><span class="lang">tmpl</span></div>
+  <pre class="code">{{define "title"}}Home{{end}}
+
+{{define "main"}}
+    &lt;h2&gt;Latest Snippets&lt;/h2&gt;
+
+    {{if .Snippets}}
+    &lt;table&gt;
+        &lt;tr&gt;
+            &lt;th&gt;Title&lt;/th&gt;
+            &lt;th&gt;Created&lt;/th&gt;
+            &lt;th&gt;ID&lt;/th&gt;
+        &lt;/tr&gt;
+        {{range .Snippets}}
+        &lt;tr&gt;
+            &lt;td&gt;&lt;a href='/snippet/view?id={{.ID}}'&gt;{{.Title}}&lt;/a&gt;&lt;/td&gt;
+            &lt;td&gt;{{.Created}}&lt;/td&gt;
+            &lt;td&gt;#{{.ID}}&lt;/td&gt;
+        &lt;/tr&gt;
+        {{end}}
+    &lt;/table&gt;
+    {{else}}
+        &lt;p&gt;There's nothing to see here... yet!&lt;/p&gt;
+    {{end}}
+{{end}}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-03}}" alt="A wireframe of the home page: Snippetbox header, Home nav, Latest Snippets heading and a table of four rows with title, created and ID columns.">
+  <figcaption><b>Figure 5.3</b> — the target: a table of the latest snippets, with an ID column and a Created
+    column.</figcaption>
+</figure>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-04}}" alt="The rendered home page at localhost:4000, listing four snippets in a table: O snail, First autumn morning, Over the wintry forest, An old silent pond.">
+  <figcaption><b>Figure 5.4</b> — <code>{{if}}</code>/<code>{{range}}</code> in action. Note the newest-first
+    order: that comes from <code>ORDER BY id DESC LIMIT 10</code> in chapter 4's <code>Latest()</code>.</figcaption>
+</figure>
+
+<div class="note">
+  <p><b>Combining functions.</b> Parentheses group functions and their arguments:</p>
+  <pre class="snippet">{{if (gt (len .Foo) 99)}} C1 {{end}}
+{{if (and (eq .Foo 1) (le .Bar 20))}} C1 {{end}}</pre>
+  <p><b>Controlling loops.</b> <code>{{break}}</code> ends a range early and <code>{{continue}}</code> skips to
+    the next iteration — both <b>live</b> in the playground at <code>/tplx</code>.</p>
+</div>
+
+<h2 class="sec" id="s53">5.3 · Caching templates</h2>
+<p>Two problems at this point. Every request re-reads and re-parses its templates from disk; and the home and
+  view handlers now duplicate the same parse-execute-error dance. The first is solved with an in-memory cache of
+  parsed template sets:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/templates.go — newTemplateCache()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> newTemplateCache() (map[<span class="kw">string</span>]*template.Template, <span class="kw">error</span>) {
+    <span class="com">// Initialize a new map to act as the cache.</span>
+    cache := map[<span class="kw">string</span>]*template.Template{}
+
+    <span class="com">// Use the filepath.Glob() function to get a slice of all filepaths that</span>
+    <span class="com">// match the pattern "./ui/html/pages/*.tmpl". This will essentially gives</span>
+    <span class="com">// us a slice of all the filepaths for our application 'page' templates</span>
+    <span class="com">// like: [ui/html/pages/home.tmpl ui/html/pages/view.tmpl]</span>
+    pages, err := filepath.Glob(<span class="str">"./ui/html/pages/*.tmpl"</span>)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> <span class="kw">nil</span>, err
+    }
+
+    <span class="com">// Loop through the page filepaths one-by-one.</span>
+    <span class="kw">for</span> _, page := <span class="kw">range</span> pages {
+        <span class="com">// Extract the file name (like 'home.tmpl') from the full filepath</span>
+        <span class="com">// and assign it to the name variable.</span>
+        name := filepath.Base(page)
+
+        <span class="com">// Create a slice containing the filepaths for our base template, any</span>
+        <span class="com">// partials and the page.</span>
+        files := []<span class="kw">string</span>{
+            <span class="str">"./ui/html/base.tmpl"</span>,
+            <span class="str">"./ui/html/partials/nav.tmpl"</span>,
+            page,
+        }
+
+        <span class="com">// Parse the files into a template set.</span>
+        ts, err := template.ParseFiles(files...)
+        <span class="kw">if</span> err != <span class="kw">nil</span> {
+            <span class="kw">return</span> <span class="kw">nil</span>, err
+        }
+
+        <span class="com">// Add the template set to the map, using the name of the page</span>
+        <span class="com">// (like 'home.tmpl') as the key.</span>
+        cache[name] = ts
+    }
+
+    <span class="com">// Return the map.</span>
+    <span class="kw">return</span> cache, <span class="kw">nil</span>
+}</pre>
+</div>
+
+<p>It's built in <code>main()</code> and injected through the application struct like every other dependency —
+  and because a template set that fails to parse is a programming error, <code>main()</code> treats it as
+  fatal:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Add a templateCache field to the application struct.</span>
+<span class="kw">type</span> application <span class="kw">struct</span> {
+    errorLog      *log.Logger
+    infoLog       *log.Logger
+    snippets      *models.SnippetModel
+    templateCache map[<span class="kw">string</span>]*template.Template
+}
+
+<span class="com">// Initialize a new template cache...</span>
+templateCache, err := newTemplateCache()
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    errorLog.Fatal(err)
+}
+
+<span class="com">// And add it to the application dependencies.</span>
+app := &amp;application{
+    errorLog:      errorLog,
+    infoLog:       infoLog,
+    snippets:      &amp;models.SnippetModel{DB: db},
+    templateCache: templateCache,
+}</pre>
+</div>
+
+<p>The second problem — duplication — is solved by a <code>render()</code> helper method:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/helpers.go — render()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (app *application) render(w http.ResponseWriter, status <span class="kw">int</span>, page <span class="kw">string</span>, data *templateData) {
+    <span class="com">// Retrieve the appropriate template set from the cache based on the page</span>
+    <span class="com">// name (like 'home.tmpl'). If no entry exists in the cache with the</span>
+    <span class="com">// provided name, then create a new error and call the serverError() helper</span>
+    <span class="com">// method that we made earlier and return.</span>
+    ts, ok := app.templateCache[page]
+    <span class="kw">if</span> !ok {
+        err := fmt.Errorf(<span class="str">"the template %s does not exist"</span>, page)
+        app.serverError(w, err)
+        <span class="kw">return</span>
+    }
+
+    <span class="com">// Write out the provided HTTP status code ('200 OK', '400 Bad Request'</span>
+    <span class="com">// etc).</span>
+    w.WriteHeader(status)
+
+    <span class="com">// Execute the template set and write the response body. Again, if there</span>
+    <span class="com">// is any error we call the the serverError() helper.</span>
+    err := ts.ExecuteTemplate(w, <span class="str">"base"</span>, data)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        app.serverError(w, err)
+    }
+}</pre>
+</div>
+
+<p>Which collapses both handlers to their actual job — fetch data, then render:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Use the new render helper.</span>
+app.render(w, http.StatusOK, <span class="str">"home.tmpl"</span>, &amp;templateData{
+    Snippets: snippets,
+})
+
+<span class="com">// ...and in snippetView():</span>
+app.render(w, http.StatusOK, <span class="str">"view.tmpl"</span>, &amp;templateData{
+    Snippet: snippet,
+})</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-06}}" alt="The home page after the template cache refactor, looking identical to before with the four snippets listed.">
+  <figcaption><b>Figure 5.5</b> — the home page after the cache refactor: byte-for-byte the same output, just
+    without re-parsing the templates for each request.</figcaption>
+</figure>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-05}}" alt="The snippet view page after the template cache refactor, unchanged, showing the An old silent pond haiku.">
+  <figcaption><b>Figure 5.6</b> — and the view page, likewise unchanged. A refactor that changes the output is a
+    bug; this one doesn't.</figcaption>
+</figure>
+
+<p>Finally, <code>newTemplateCache()</code> is made flexible so any new partial is picked up automatically,
+  rather than naming <code>nav.tmpl</code> by hand:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/templates.go — automatically parsing partials</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">for</span> _, page := <span class="kw">range</span> pages {
+    name := filepath.Base(page)
+
+    <span class="com">// Parse the base template file into a template set.</span>
+    ts, err := template.ParseFiles(<span class="str">"./ui/html/base.tmpl"</span>)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> <span class="kw">nil</span>, err
+    }
+
+    <span class="com">// Call ParseGlob() *on this template set* to add any partials.</span>
+    ts, err = ts.ParseGlob(<span class="str">"./ui/html/partials/*.tmpl"</span>)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> <span class="kw">nil</span>, err
+    }
+
+    <span class="com">// Call ParseFiles() *on this template set* to add the  page template.</span>
+    ts, err = ts.ParseFiles(page)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> <span class="kw">nil</span>, err
+    }
+
+    <span class="com">// Add the template set to the map as normal...</span>
+    cache[name] = ts
+}</pre>
+</div>
+
+<h2 class="sec" id="s54">5.4 · Catching runtime errors</h2>
+<p>Dynamic behaviour brings runtime errors. The book adds <code>{{len nil}}</code> to
+  <code>view.tmpl</code> — which compiles fine, because <code>nil</code> has no length only when the command
+  actually executes.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/view.tmpl — with a deliberate error</span><span class="lang">tmpl</span></div>
+  <pre class="code">{{define "main"}}
+    {{with .Snippet}}
+    &lt;div class='snippet'&gt;
+        &lt;div class='metadata'&gt;
+            &lt;strong&gt;{{.Title}}&lt;/strong&gt;
+            &lt;span&gt;#{{.ID}}&lt;/span&gt;
+        &lt;/div&gt;
+        {{len nil}} &lt;!-- Deliberate error --&gt;
+        &lt;pre&gt;&lt;code&gt;{{.Content}}&lt;/code&gt;&lt;/pre&gt;
+    &lt;/div&gt;
+    {{end}}
+{{end}}</pre>
+</div>
+
+<p>What comes back is the interesting part: <code>200 OK</code>, a <code>Content-Length</code> header — and a
+  page that stops mid-sentence, with the words <code>Internal Server Error</code> where the content should be. The
+  status line has already gone out; there is no taking it back.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — the half-written 200</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ curl -i "http://localhost:4000/snippet/view?id=1"</span>
+<span class="out">HTTP/1.1 200 OK
+Content-Length: 762
+Content-Type: text/html; charset=utf-8
+
+&lt;!doctype html&gt;
+...
+    &lt;div class='snippet'&gt;
+        &lt;div class='metadata'&gt;
+            &lt;strong&gt;An old silent pond&lt;/strong&gt;
+            &lt;span&gt;#1&lt;/span&gt;
+        &lt;/div&gt;
+        Internal Server Error</span></pre>
+</div>
+
+<p>The fix is a two-stage render: execute into a buffer first, and only write the status and the body if that
+  succeeds.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/helpers.go — the buffered render()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Initialize a new buffer.</span>
+buf := <span class="kw">new</span>(bytes.Buffer)
+
+<span class="com">// Write the template to the buffer, instead of straight to the</span>
+<span class="com">// http.ResponseWriter. If there's an error, call our serverError() helper</span>
+<span class="com">// and then return.</span>
+err := ts.ExecuteTemplate(buf, <span class="str">"base"</span>, data)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    app.serverError(w, err)
+    <span class="kw">return</span>
+}
+
+<span class="com">// If the template is written to the buffer without any errors, we are safe</span>
+<span class="com">// to go ahead and write the HTTP status code to http.ResponseWriter.</span>
+w.WriteHeader(status)
+
+<span class="com">// Write the contents of the buffer to the http.ResponseWriter. Note: this</span>
+<span class="com">// is another time where we pass our http.ResponseWriter to a function that</span>
+<span class="com">// takes an io.Writer.</span>
+buf.WriteTo(w)</pre>
+</div>
+
+<p>Now the same request produces a clean <code>500 Internal Server Error</code>, a plain-text body, and no
+  half-page leakage. <b>Live:</b> <code>/tplx/error</code> runs both versions side by side and shows the exact
+  template error, with its line and column.</p>
+
+<h2 class="sec" id="s55">5.5 · Common dynamic data</h2>
+<p>Some data belongs on every page — a user's name, a CSRF token, or here, the current year in the footer. Add
+  the field to <code>templateData</code>, then add a helper that produces it:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/templates.go, then helpers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Add a CurrentYear field to the templateData struct.</span>
+<span class="kw">type</span> templateData <span class="kw">struct</span> {
+    CurrentYear <span class="kw">int</span>
+    Snippet     *models.Snippet
+    Snippets    []*models.Snippet
+}
+
+<span class="com">// Create an newTemplateData() helper, which returns a pointer to a templateData</span>
+<span class="com">// struct initialized with the current year. Note that we're not using the </span>
+<span class="com">// *http.Request parameter here at the moment, but we will do later in the book.</span>
+<span class="kw">func</span> (app *application) newTemplateData(r *http.Request) *templateData {
+    <span class="kw">return</span> &amp;templateData{
+        CurrentYear: time.Now().Year(),
+    }
+}</pre>
+</div>
+
+<p>The handlers then take the default data and add their own, which is the pattern every later chapter builds
+  on:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Call the newTemplateData() helper to get a templateData struct containing</span>
+<span class="com">// the 'default' data (which for now is just the current year), and add the</span>
+<span class="com">// snippets slice to it.</span>
+data := app.newTemplateData(r)
+data.Snippets = snippets
+
+<span class="com">// Pass the data to the render() helper as normal.</span>
+app.render(w, http.StatusOK, <span class="str">"home.tmpl"</span>, data)</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/base.tmpl — the footer</span><span class="lang">tmpl</span></div>
+  <pre class="code">&lt;footer&gt;
+    &lt;!-- Update the footer to include the current year --&gt;
+    Powered by &lt;a href='https://golang.org/'&gt;Go&lt;/a&gt; in {{.CurrentYear}}
+&lt;/footer&gt;</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-07}}" alt="The home page with the footer now reading Powered by Go in 2022.">
+  <figcaption><b>Figure 5.7</b> — “in 2022” appears on every page from one helper, not from a copy in each
+    handler.</figcaption>
+</figure>
+
+<h2 class="sec" id="s56">5.6 · Custom template functions</h2>
+<p>The dates still read <code>2022-04-05 07:20:05 +0000 UTC</code>. A custom function fixes that. Two steps: a
+  <code>template.FuncMap</code> mapping names to functions, and <code>template.Funcs()</code> registering it
+  <em>before</em> any parsing.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/templates.go — humanDate()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Create a humanDate function which returns a nicely formatted string</span>
+<span class="com">// representation of a time.Time object.</span>
+<span class="kw">func</span> humanDate(t time.Time) <span class="kw">string</span> {
+    <span class="kw">return</span> t.Format(<span class="str">"02 Jan 2006 at 15:04"</span>)
+}
+
+<span class="com">// Initialize a template.FuncMap object and store it in a global variable. This is</span>
+<span class="com">// essentially a string-keyed map which acts as a lookup between the names of our</span>
+<span class="com">// custom template functions and the functions themselves.</span>
+<span class="kw">var</span> functions = template.FuncMap{
+    <span class="str">"humanDate"</span>: humanDate,
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/templates.go — registering the FuncMap</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// The template.FuncMap must be registered with the template set before you</span>
+<span class="com">// call the ParseFiles() method. This means we have to use template.New() to</span>
+<span class="com">// create an empty template set, use the Funcs() method to register the</span>
+<span class="com">// template.FuncMap, and then parse the file as normal.</span>
+ts, err := template.New(name).Funcs(functions).ParseFiles(<span class="str">"./ui/html/base.tmpl"</span>)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    <span class="kw">return</span> <span class="kw">nil</span>, err
+}
+
+ts, err = ts.ParseGlob(<span class="str">"./ui/html/partials/*.tmpl"</span>)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    <span class="kw">return</span> <span class="kw">nil</span>, err
+}
+
+ts, err = ts.ParseFiles(page)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    <span class="kw">return</span> <span class="kw">nil</span>, err
+}</pre>
+</div>
+
+<p>A custom function can take as many parameters as it likes but must return one value — or a value and an
+  error. Used in the templates, it behaves like any built-in:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/home.tmpl and view.tmpl</span><span class="lang">tmpl</span></div>
+  <pre class="code">&lt;td&gt;&lt;a href='/snippet/view?id={{.ID}}'&gt;{{.Title}}&lt;/a&gt;&lt;/td&gt;
+&lt;!-- Use the new template function here --&gt;
+&lt;td&gt;{{humanDate .Created}}&lt;/td&gt;
+&lt;td&gt;#{{.ID}}&lt;/td&gt;
+
+<span class="com">...and in view.tmpl:</span>
+&lt;time&gt;Created: {{humanDate .Created}}&lt;/time&gt;
+&lt;time&gt;Expires: {{humanDate .Expires}}&lt;/time&gt;</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-08}}" alt="The home page with dates now formatted as 05 Apr 2022 at 07:32 instead of the raw timestamp.">
+  <figcaption><b>Figure 5.8</b> — <code>05 Apr 2022 at 07:32</code> in place of
+    <code>2022-04-05 07:32:45 +0000 UTC</code>. One function, used in every template.</figcaption>
+</figure>
+
+<figure class="shot">
+  <img src="{{IMG:ch5-09}}" alt="The snippet view page with its Created and Expires dates in the humanized format.">
+  <figcaption><b>Figure 5.9</b> — the same function on the view page, for both timestamps. The year in the footer
+    comes from section 5.5.</figcaption>
+</figure>
+
+<h2 class="sec" id="ch5-demo">Chapter 5, running live</h2>
+<p>The demo's pages are rendered from the same <code>.tmpl</code> files by the same
+  <code>newTemplateCache()</code> → <code>render()</code> path, so what you see below is the chapter's actual
+  output.</p>
+
+<div class="demo">
+  <div class="demo__head">
+    <h3>Chapter 5 controls</h3>
+    <span class="live"><i></i><span id="ch5State">connecting…</span></span>
+    <a class="btn" href="http://localhost:3000/newsnippets" target="_blank" rel="noopener" style="margin-left:auto">Open the rendered home page ↗</a>
+  </div>
+  <div class="demo__body">
+    <p style="margin:0 0 10px"><strong>5.1–5.2 Rendered pages and actions</strong>
+      <span style="color:#7b8b93;font-size:14px">— the real templates, plus <code>with</code>/<code>if</code>/<code>range</code></span></p>
+    <div class="row">
+      <button class="btn btn--green" data-ch5="home">GET /newsnippets</button>
+      <button class="btn" data-ch5="view">GET /newsnippets/view?id=1</button>
+      <button class="btn" data-ch5="view99">id=99 (404)</button>
+      <button class="btn" data-ch5="range">range + else</button>
+      <button class="btn" data-ch5="with">with + humanDate</button>
+    </div>
+    <div class="resp" data-ch5-slot="tpl" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>5.1 Escaping and 5.4 runtime errors</strong>
+      <span style="color:#7b8b93;font-size:14px">— why <code>html/template</code> and not <code>text/template</code></span></p>
+    <div class="row">
+      <button class="btn btn--red" data-ch5="xss">Render an XSS payload</button>
+      <button class="btn" data-ch5="error">The two-stage render</button>
+    </div>
+    <div class="resp" data-ch5-slot="safe" hidden></div>
+  </div>
+  <div class="demo__foot">
+    <span>Pages: <code>/newsnippets</code> · <code>/newsnippets/view?id=1</code> · <code>/tplx</code> · <code>/tplx/error</code></span>
+    <a href="http://localhost:3000/tplx" target="_blank" rel="noopener">Template playground</a>
+  </div>
+</div>
+
+<h2 class="sec" id="ch5-takeaways">What chapter 5 leaves you with</h2>
+<table>
+  <thead><tr><th>Concept</th><th>Where it is demonstrated live</th></tr></thead>
+  <tbody>
+    <tr><td>One <code>templateData</code> struct, one dot</td><td>every page; figure 5.2</td></tr>
+    <tr><td><code>{{with}}</code> / <code>{{if}}</code> / <code>{{range}}</code> change dot</td><td><code>/tplx</code> playground</td></tr>
+    <tr><td>Escaping is automatic and context-dependent</td><td><code>/tplx/escape</code> — HTML text, attribute, URI, JS</td></tr>
+    <tr><td>Template cache built once, injected</td><td>start-up log: “Template cache: 3 page templates parsed”</td></tr>
+    <tr><td><code>render()</code> with a buffer prevents half-written 200s</td><td><code>/tplx/error</code> — both versions side by side</td></tr>
+    <tr><td>Common data via <code>newTemplateData()</code></td><td>the year in every footer</td></tr>
+    <tr><td>Custom functions via <code>FuncMap</code></td><td><code>humanDate</code> on both pages</td></tr>
+  </tbody>
+</table>
+<p>Chapter 6, <em>Middleware</em>, starts on page 162 — where that <code>routes()</code> function gets wrapped in
+  security headers, request logging and panic recovery.</p>

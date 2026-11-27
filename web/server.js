@@ -22,6 +22,7 @@ const chapter2 = require('./snippetbox/routes');
 const { parseConfig, Application } = require('./snippetbox/app');
 const chapter3 = require('./snippetbox/chapter3');
 const chapter4 = require('./snippetbox/chapter4');
+const chapter5 = require('./snippetbox/chapter5');
 const models = require('./snippetbox/models');
 
 // Chapter 3.1: configuration comes from command-line flags, parsed before
@@ -180,6 +181,7 @@ function layout(opts) {
   ${link('/summary', 'Summary')}
   <li><a href="/home" ${active === '/home' ? 'class=on' : ''}>Templated home</a></li>
   ${link('/db', 'Database')}
+  ${link('/newsnippets', 'Templates')}
   ${link('/logs', 'Logs')}
   <li class="right"><a href="/" target="_blank" rel="noopener">GET / <span class="muted">raw</span></a></li>
 </ul></nav>
@@ -395,6 +397,8 @@ function handler(req, res) {
   if (chapter3.handle(req, res, url, app, config)) return;
   // Chapter 4.7/4.8 own /snippet/view and /snippets, so they dispatch first.
   if (chapter4.handle(req, res, url, db, app)) return;
+  // Chapter 5: the dynamic HTML templates, rendered from ui/html/*.tmpl.
+  if (chapter5.handle(req, res, url, app, db)) return;
   if (chapter2.handle(req, res, url, config, app)) return;
 
   // 1. The home route.
@@ -464,6 +468,7 @@ server.on('error', (err) => {
 server.listen(PORT, HOST, () => {
   app.infoLog.Printf('Starting server on %s', config.addr);
   app.infoLog.Printf('Database: in-memory snippets table seeded with %d rows (db.Ping() ok)', db.table.rows.length);
+  app.infoLog.Printf('Template cache: %d page templates parsed from ui/html (newTemplateCache)', chapter5.newTemplateCache(chapter5.UI_ROOT).size);
   app.infoLog.Printf('Request console: http://%s/console', config.addr.replace(/^:/, 'localhost:'));
 });
 

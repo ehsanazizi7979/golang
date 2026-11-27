@@ -1,4 +1,4 @@
-/* Page script for chapter-one.html — the chapters 1-4 summary.
+/* Page script for chapter-one.html — the chapters 1-5 summary.
  *
  * Kept as a real .js file (rather than a Python string) so the escaping is
  * unambiguous; build_chapter1.py inlines it into the generated page. */
@@ -327,6 +327,106 @@
     return function (err) { fail(slot, err); };
   }
 
+  /* ------------------------------------------------------------ chapter 5 */
+
+  var CH5_SLOT = { home: 'tpl', view: 'tpl', view99: 'tpl', range: 'tpl', with: 'tpl',
+                   xss: 'safe', error: 'safe' };
+
+  function tplRun(source, data) {
+    return fetch(DEMO + '/api/tplx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: source, data: JSON.stringify(data) })
+    }).then(function (r) { return r.json(); });
+  }
+
+  document.querySelectorAll('[data-ch5]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key = btn.getAttribute('data-ch5');
+      var slot = document.querySelector('[data-ch5-slot="' + (CH5_SLOT[key] || 'tpl') + '"]');
+      btn.disabled = true;
+      var done = function () { btn.disabled = false; };
+
+      if (key === 'home' || key === 'view' || key === 'view99') {
+        var path = key === 'home' ? '/newsnippets'
+          : key === 'view' ? '/newsnippets/view?id=1' : '/newsnippets/view?id=99';
+        fetch(DEMO + path, { cache: 'no-store' }).then(function (r) {
+          return r.text().then(function (body) { return [r, body]; });
+        }).then(function (pair) {
+          var res = pair[0], body = pair[1];
+          if (res.status === 404) {
+            message(slot, 404, 'not found',
+              'Get(99) -> models.ErrNoRecord, so snippetView() calls app.notFound(w)\n' +
+              'before any template is touched. The template cache is never consulted.');
+            return;
+          }
+          var main = /<main>([\s\S]*?)<\/main>/.exec(body);
+          var title = /<title>([\s\S]*?)<\/title>/.exec(body);
+          var footer = /<footer>([\s\S]*?)<\/footer>/.exec(body);
+          message(slot, res.status, key === 'home' ? 'home.tmpl rendered' : 'view.tmpl rendered',
+            '<title>' + (title ? title[1].trim() : '') + '</title>\n\n' +
+            (main ? main[1].trim() : body.trim()) +
+            '\n\n<footer>' + (footer ? footer[1].trim().replace(/\s+/g, ' ') : '') + '</footer>');
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'range') {
+        tplRun('{{range .Snippets}}<tr><td>{{.Title}}</td><td>{{humanDate .Created}}</td></tr>\n{{else}}<p>There is nothing to see here... yet!</p>\n{{end}}',
+          { Snippets: [
+              { Title: 'O snail', Created: '2022-04-05T07:32:45Z' },
+              { Title: 'An old silent pond', Created: '2022-04-05T07:20:05Z' },
+              { Title: 'An old silent pond', Created: '2022-04-05T07:20:05Z', ID: 1 } ] })
+          .then(function (r) {
+            message(slot, 200, 'range over 3 snippets', r.ok ? r.html : 'ERROR\n' + r.error);
+          }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'with') {
+        tplRun('{{with .Snippet}}\n  <strong>{{.Title}}</strong> #{{.ID}}\n  Created: {{humanDate .Created}}\n{{else}}\n  no snippet\n{{end}}\n\n{{with .Missing}}x{{else}}dot unchanged where .Missing is nil{{end}}',
+          { Snippet: { ID: 1, Title: 'An old silent pond', Created: '2022-04-05T07:20:05Z' }, Missing: null })
+          .then(function (r) {
+            message(slot, 200, 'with changes dot', r.ok ? r.html : 'ERROR\n' + r.error);
+          }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'xss') {
+        // Split literals: a literal closing script tag inside a string would
+        // terminate the page's script element early.
+        var payload = '<' + 'script>alert(\'xss attack\')<' + '/script>';
+        tplRun('<p>{{.Payload}}</p>', { Payload: payload })
+          .then(function (r) {
+            message(slot, 200, 'html/template escaped it',
+              'value yielded:  ' + payload + '\n\n' +
+              'html/template:  ' + (r.ok ? r.html : r.error) + '\n\n' +
+              'text/template would have emitted the ' + '<' + 'script>' + ' tag verbatim.\n' +
+              'Go also chooses the escaper by context — HTML text, attribute,\n' +
+              'URI, JS or CSS — so the same value is escaped five ways.');
+          }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'error') {
+        fetch(DEMO + '/tplx/error', { cache: 'no-store' }).then(function (r) {
+          return r.text();
+        }).then(function (body) {
+          var m = /template: home\.tmpl[^<"]*/.exec(body);
+          var chunks = /(\d+) chunks were written/.exec(body);
+          message(slot, 500, 'half-written 200 -> clean 500',
+            'The one-stage render had already sent "200 OK" and\n' +
+            (chunks ? chunks[1] : '?') + ' chunks of markup when {{len nil}} failed.\n\n' +
+            'The error:\n  ' + (m ? m[0].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim() : 'home.tmpl:5:5') + '\n\n' +
+            'The two-stage render writes to a bytes.Buffer first, so\n' +
+            'the buffer is discarded and the user gets a plain 500\n' +
+            'instead of half a page with the wrong status code.');
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+    });
+  });
+
   /* --------------------------------------------------------- live badges */
 
   function badge(id) {
@@ -344,6 +444,7 @@
   badge('ch2State');
   badge('ch3State');
   badge('ch4State');
+  badge('ch5State');
 
   /* ------------------------------------------------------- replica form */
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build chapter-one.html — a single self-contained page covering
-chapters 1-4 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
+chapters 1-5 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
 
 Sources (all extracted from Let's Go [Alex Edwards].pdf in this directory)
 
@@ -11,6 +11,8 @@ Sources (all extracted from Let's Go [Alex Edwards].pdf in this directory)
                           (no figures in this chapter)
   chapter 4   pp.  86-126 Database-driven responses, sections 4.1 - 4.9
                           (5 figures: go.sum, models dir, %+v dumps, 404)
+  chapter 5   pp. 127-161 Dynamic HTML templates, sections 5.1 - 5.6
+                          (9 figures: wireframes, rendered pages, humanDate)
   main.go     p.  14      used by the live demo
 
 Figures
@@ -53,6 +55,15 @@ IMAGES = {
     "ch4-03": ROOT / "assets" / "ch4" / "03-snippet-view.jpg",
     "ch4-04": ROOT / "assets" / "ch4" / "04-expired-snippet-404.jpg",
     "ch4-05": ROOT / "assets" / "ch4" / "05-latest-snippets.jpg",
+    "ch5-01": ROOT / "assets" / "ch5" / "01-view-wireframe.jpg",
+    "ch5-02": ROOT / "assets" / "ch5" / "02-view-page.jpg",
+    "ch5-03": ROOT / "assets" / "ch5" / "03-home-wireframe.jpg",
+    "ch5-04": ROOT / "assets" / "ch5" / "04-home-page.jpg",
+    "ch5-05": ROOT / "assets" / "ch5" / "05-view-after-cache.jpg",
+    "ch5-06": ROOT / "assets" / "ch5" / "06-home-after-cache.jpg",
+    "ch5-07": ROOT / "assets" / "ch5" / "07-home-current-year.jpg",
+    "ch5-08": ROOT / "assets" / "ch5" / "08-home-humandate.jpg",
+    "ch5-09": ROOT / "assets" / "ch5" / "09-view-humandate.jpg",
 }
 
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
@@ -99,6 +110,13 @@ def verify_pages() -> None:
         109: "Single-record SQL queries",
         116: "Multiple-record SQL queries",
         121: "Transactions and other details",
+        127: "Dynamic HTML templates",
+        128: "Displaying dynamic data",
+        136: "Template actions and functions",
+        142: "Caching templates",
+        149: "Catching runtime errors",
+        153: "Common dynamic data",
+        157: "Custom template functions",
     }
     for pno, needle in checks.items():
         text = doc[pno - 1].get_text()
@@ -232,17 +250,18 @@ HERO = f"""
 <div class="hero">
   <div class="wrap">
     <p class="kicker">Let’s Go · Alex Edwards · 2nd edition, v2.20.0</p>
-    <h1>Chapters 1–4 — <span>Introduction</span><br>&amp; Foundations to Databases</h1>
+    <h1>Chapters 1–5 — <span>Introduction</span><br>&amp; Foundations to Templates</h1>
     <p>Build Snippetbox: a web app for pasting and sharing snippets of text. Chapter one sets the destination and
        the toolchain; chapter two builds the whole foundations of the app — modules, routing, headers, query
        strings, project structure, templates and static files. Chapter three adds nothing visible and makes
        everything maintainable: flags, leveled logs, injected dependencies and centralised errors. Chapter four
-       gives it a memory — a MySQL connection pool, a models package, and every shape of SQL call.</p>
+       gives it a memory — a MySQL connection pool, a models package, and every shape of SQL call — and chapter
+       five gives it a face: templates, actions, a cache, and a render that fails safely.</p>
     <div class="meta">
-      <span>121 pages of source (pp. 6–126)</span>
-      <span>20 figures, all embedded</span>
+      <span>156 pages of source (pp. 6–161)</span>
+      <span>29 figures, all embedded</span>
       <span>Live demo on port {DEMO_PORT}</span>
-      <span>Reading time ≈ 50 min</span>
+      <span>Reading time ≈ 65 min</span>
     </div>
   </div>
 </div>
@@ -300,6 +319,17 @@ TOC = """
       <li><a href="#ch4-demo">Chapter 4 live</a></li>
       <li><a href="#ch4-takeaways">Takeaways</a></li>
     </ol>
+    <p class="part">Chapter 5 · Templates</p>
+    <ol>
+      <li><a href="#s51">5.1 Dynamic data</a></li>
+      <li><a href="#s52">5.2 Actions &amp; functions</a></li>
+      <li><a href="#s53">5.3 Caching templates</a></li>
+      <li><a href="#s54">5.4 Runtime errors</a></li>
+      <li><a href="#s55">5.5 Common data</a></li>
+      <li><a href="#s56">5.6 Custom functions</a></li>
+      <li><a href="#ch5-demo">Chapter 5 live</a></li>
+      <li><a href="#ch5-takeaways">Takeaways</a></li>
+    </ol>
   </nav>
 """
 
@@ -313,6 +343,7 @@ def build() -> str:
     ch2 = (ROOT / "content" / "chapter2.html").read_text(encoding="utf-8")
     ch3 = (ROOT / "content" / "chapter3.html").read_text(encoding="utf-8")
     ch4 = (ROOT / "content" / "chapter4.html").read_text(encoding="utf-8")
+    ch5 = (ROOT / "content" / "chapter5.html").read_text(encoding="utf-8")
 
     # chapter 1's hero/toc listed a "Where it goes next" section; keep its content
     # but retitle it so it reads as a bridge into chapter 2.
@@ -336,6 +367,8 @@ def build() -> str:
         + ch3.strip()
         + '\n<hr class="rule" id="chapter4">\n'
         + ch4.strip()
+        + '\n<hr class="rule" id="chapter5">\n'
+        + ch5.strip()
         + "\n</article></div>"
     )
 
@@ -344,7 +377,7 @@ def build() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Let&#39;s Go — chapters 1–4 summary</title>
+<title>Let&#39;s Go — chapters 1–5 summary</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -352,10 +385,11 @@ def build() -> str:
 {body}
 <footer>
   <div class="wrap">
-    Summary of chapters 1–4 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
+    Summary of chapters 1–5 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
     Alex Edwards (2nd edition, v2.20.0), generated from <code>Let’s Go [Alex Edwards].pdf</code> in this repository:
-    pages 6–10 for chapter 1, 11–61 for chapter 2, 62–85 for chapter 3 and 86–126 for chapter 4. All 20 figures —
-    chapter 3 has none — were extracted with PyMuPDF and inlined as base64, so this file needs no network access.<br>
+    pages 6–10 for chapter 1, 11–61 for chapter 2, 62–85 for chapter 3, 86–126 for chapter 4 and 127–161 for
+    chapter 5. All 29 figures — chapter 3 has none — were extracted with PyMuPDF and inlined as base64, so this
+    file needs no network access.<br>
     Live demo: <code>web/snippetbox/</code> — the book’s own templates, static directory, flags and loggers, served by
     <code>web/server.js</code> on port {DEMO_PORT}. Rebuild this page with
     <code>python3 build_chapter1.py</code>.
