@@ -26,8 +26,17 @@ const path = require('path');
 const crypto = require('crypto');
 
 const APP_ROOT = __dirname;
-const HTML_ROOT = path.join(APP_ROOT, 'ui', 'html');
-const STATIC_ROOT = path.join(APP_ROOT, 'ui', 'static');
+
+// Chapter 3.1: these were hard-coded ("", "./ui/static") before the book made
+// them configurable. They now come from the parsed flags, with the project's own
+// directories as defaults.
+const DEFAULTS = {
+  templateDir: path.join(APP_ROOT, 'ui', 'html'),
+  staticDir: path.join(APP_ROOT, 'ui', 'static'),
+};
+let HTML_ROOT = DEFAULTS.templateDir;
+let STATIC_ROOT = DEFAULTS.staticDir;
+let currentConfig = null;
 
 /* ------------------------------------------------------- tiny template engine
  * Supports exactly what chapter 2.7 uses: {{define "name"}}...{{end}} blocks,
@@ -69,6 +78,15 @@ function parseDefs(source, into) {
 function loadTemplates(files) {
   const defs = new Map();
   for (const rel of files) {
+    if (currentConfig && currentConfig.brokenTemplate) {
+      // The chapter-3 exercise: "open ./ui/html/pages/home.tmpl: no such file
+      // or directory". Raised like Go's os error so the 500 path is exercised.
+      if (rel.includes('pages/home.tmpl')) {
+        const err = new Error('open ' + path.join(HTML_ROOT, rel) + ': no such file or directory');
+        err.code = 'ENOENT';
+        throw err;
+      }
+    }
     const full = path.join(HTML_ROOT, rel);
     parseDefs(fs.readFileSync(full, 'utf8'), defs);
   }
@@ -245,8 +263,16 @@ function templatesPage() {
 /**
  * Handles the chapter-2 routes. Returns true when the request was answered.
  */
-function handle(req, res, url) {
+function handle(req, res, url, config, app) {
   const p = url.pathname;
+
+  // Chapter 3.1: honour -template-dir and -static-dir if they were provided.
+  if (config) {
+    currentConfig = config;
+    HTML_ROOT = config.templateDir || DEFAULTS.templateDir;
+    STATIC_ROOT = config.staticDir || DEFAULTS.staticDir;
+    if (app) currentConfig = app.config || config;
+  }
 
   // A fully templated home page, at /home so that "/" can keep serving the
   // chapter 2.2 plain-text response that the request console demonstrates.
@@ -258,11 +284,15 @@ function handle(req, res, url) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': buf.length });
       res.end(buf);
     } catch (err) {
-      // The book's handler logs the error and sends a generic 500.
-      console.error(err.message);
-      const buf = Buffer.from('Internal Server Error\n');
-      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Length': buf.length });
-      res.end(buf);
+      // Chapter 3.3/3.4: the handler reports through the injected errorLog and
+      // app.serverError, which logs a stack trace and sends a generic 500.
+      if (app) app.serverError(res, err);
+      else {
+        console.error(err.message);
+        const buf = Buffer.from('Internal Server Error\n');
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Length': buf.length });
+        res.end(buf);
+      }
     }
     return true;
   }

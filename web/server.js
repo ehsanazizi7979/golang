@@ -19,9 +19,16 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const chapter2 = require('./snippetbox/routes');
+const { parseConfig, Application } = require('./snippetbox/app');
+const chapter3 = require('./snippetbox/chapter3');
 
-const PORT = Number(process.env.PORT || 3000);
-const HOST = process.env.HOST || '0.0.0.0';
+// Chapter 3.1: configuration comes from command-line flags, parsed before
+// anything else happens.
+const config = parseConfig(process.argv);
+const app = new Application(config);
+
+const PORT = config.port;
+const HOST = config.host;
 const STARTED = new Date();
 
 const LOG = [];
@@ -155,6 +162,7 @@ function layout(opts) {
   ${link('/routes', 'Routes')}
   ${link('/summary', 'Summary')}
   <li><a href="/home" ${active === '/home' ? 'class=on' : ''}>Templated home</a></li>
+  ${link('/logs', 'Logs')}
   <li class="right"><a href="/" target="_blank" rel="noopener">GET / <span class="muted">raw</span></a></li>
 </ul></nav>
 <main>${body}</main>
@@ -366,7 +374,8 @@ function handler(req, res) {
   });
 
   // Chapter 2.7-2.8: templated home page and the static file server.
-  if (chapter2.handle(req, res, url)) return;
+  if (chapter3.handle(req, res, url, app, config)) return;
+  if (chapter2.handle(req, res, url, config, app)) return;
 
   // 1. The home route.
   if (p === '/') {
@@ -426,15 +435,17 @@ const server = http.createServer(handler);
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`Port ${PORT} is already in use — stop the other process or run with PORT=3001`);
+    app.errorLog.Print(`listen tcp ${config.addr}: bind: address already in use`);
   } else {
-    console.error('Server error:', err.message);
+    app.errorLog.Print(err.message);
   }
   process.exit(1);
 });
 
+// Chapter 3.2: informational messages go through infoLog, with the INFO prefix.
 server.listen(PORT, HOST, () => {
-  console.log(`Snippetbox demo listening on http://${HOST}:${PORT}  (console: /console)`);
+  app.infoLog.Printf('Starting server on %s', config.addr);
+  app.infoLog.Printf('Request console: http://%s/console', config.addr.replace(/^:/, 'localhost:'));
 });
 
 // Shut down cleanly so a restart always frees the port.

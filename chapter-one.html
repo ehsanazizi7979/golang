@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Let&#39;s Go — chapters 1 &amp; 2 summary</title>
+<title>Let&#39;s Go — chapters 1–3 summary</title>
 <style>
 :root{
   --ink:#283c46; --soft:#54636c; --faint:#7b8b93; --paper:#fff; --page:#f1f3f6;
@@ -124,15 +124,16 @@ footer a{border:0;text-decoration:underline}
 <div class="hero">
   <div class="wrap">
     <p class="kicker">Let’s Go · Alex Edwards · 2nd edition, v2.20.0</p>
-    <h1>Chapters 1 &amp; 2 — <span>Introduction</span><br>&amp; Foundations</h1>
+    <h1>Chapters 1–3 — <span>Introduction</span><br>&amp; Foundations &amp; Configuration</h1>
     <p>Build Snippetbox: a web app for pasting and sharing snippets of text. Chapter one sets the destination and
        the toolchain; chapter two builds the whole foundations of the app — modules, routing, headers, query
-       strings, project structure, templates and static files.</p>
+       strings, project structure, templates and static files. Chapter three adds nothing visible and makes
+       everything maintainable: flags, leveled logs, injected dependencies and centralised errors.</p>
     <div class="meta">
-      <span>56 pages of source (pp. 6–61)</span>
+      <span>80 pages of source (pp. 6–85)</span>
       <span>15 figures, all embedded</span>
       <span>Live demo on port 3000</span>
-      <span>Reading time ≈ 25 min</span>
+      <span>Reading time ≈ 35 min</span>
     </div>
   </div>
 </div>
@@ -164,6 +165,16 @@ footer a{border:0;text-decoration:underline}
       <li><a href="#s29">2.9 http.Handler</a></li>
       <li><a href="#ch2-demo">Chapter 2 live</a></li>
       <li><a href="#ch2-takeaways">Takeaways</a></li>
+    </ol>
+    <p class="part">Chapter 3 · Configuration</p>
+    <ol>
+      <li><a href="#s31">3.1 Configuration</a></li>
+      <li><a href="#s32">3.2 Leveled logging</a></li>
+      <li><a href="#s33">3.3 Dependency injection</a></li>
+      <li><a href="#s34">3.4 Centralised errors</a></li>
+      <li><a href="#s35">3.5 Routes</a></li>
+      <li><a href="#ch3-demo">Chapter 3 live</a></li>
+      <li><a href="#ch3-takeaways">Takeaways</a></li>
     </ol>
   </nav>
 <article><div class="cover">
@@ -1180,21 +1191,475 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
 <p>Chapter 3, <em>Configuration and error handling</em>, starts on page 62 — and immediately refactors everything
   above into a proper <code>application</code> struct with injected dependencies, leveled logging and centralised
   error handling.</p>
+<hr class="rule" id="chapter3">
+<h2 class="sec" id="ch3" style="margin-top:0">Chapter 3 — Configuration and error handling</h2>
+<h3>“Housekeeping”</h3>
+<p class="lead">Chapter 3 adds almost no functionality. Instead it reorganises the application so it can grow:
+  configuration comes from flags, logging gets levels, dependencies are injected through an
+  <code>application</code> struct, errors are centralised in helpers, and the routes move out of
+  <code>main()</code>. It is the chapter that turns a working demo into something maintainable.</p>
+
+<p class="note"><b>No figures in this chapter.</b> Pages 62–85 are text and code only — the first chapter of the
+  book without a single screenshot. Everything below is code the book prints, and each section links to the same
+  behaviour running live in the demo.</p>
+
+<h2 class="sec" id="s31">3.1 · Managing configuration settings</h2>
+<p><code>main.go</code> currently hard-codes two settings: the network address <code>":4000"</code> and the static
+  directory <code>"./ui/static"</code>. That mixes configuration with code and makes it impossible to use different
+  settings in development, testing and production. Go’s idiomatic fix is a command-line flag:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go run ./cmd/web -addr=":80"</span></pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Defining the flag</span><span class="lang">go</span></div>
+  <pre class="code">addr := flag.String(<span class="str">"addr"</span>, <span class="str">":4000"</span>, <span class="str">"HTTP network address"</span>)</pre>
+</div>
+
+<p>That line names the flag, sets its default and documents it. The value lands in <code>addr</code> at runtime —
+but only after <code>flag.Parse()</code> is called, and before the variable is used. The returned value is a
+<em>pointer</em>, hence the dereference when the address is used:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">import</span> (
+    <span class="str">"flag"</span> <span class="com">// New import</span>
+    <span class="str">"log"</span>
+    <span class="str">"net/http"</span>
+)
+
+<span class="kw">func</span> main() {
+    <span class="com">// Define a new command-line flag with the name 'addr', a default value of ":4000"</span>
+    <span class="com">// and some short help text explaining what the flag controls. The value of the</span>
+    <span class="com">// flag will be stored in the addr variable at runtime.</span>
+    addr := flag.String(<span class="str">"addr"</span>, <span class="str">":4000"</span>, <span class="str">"HTTP network address"</span>)
+
+    <span class="com">// Importantly, we use the flag.Parse() function to parse the command-line flag.</span>
+    <span class="com">// This reads in the command-line flag value and assigns it to the addr</span>
+    <span class="com">// variable. You need to call this *before* you use the addr variable</span>
+    <span class="com">// otherwise it will always contain the default value of ":4000". If any errors are</span>
+    <span class="com">// encountered during parsing the application will be terminated.</span>
+    flag.Parse()
+
+    mux := http.NewServeMux()
+    fileServer := http.FileServer(http.Dir(<span class="str">"./ui/static/"</span>))
+    mux.Handle(<span class="str">"/static/"</span>, http.StripPrefix(<span class="str">"/static"</span>, fileServer))
+
+    mux.HandleFunc(<span class="str">"/"</span>, home)
+    mux.HandleFunc(<span class="str">"/snippet/view"</span>, snippetView)
+    mux.HandleFunc(<span class="str">"/snippet/create"</span>, snippetCreate)
+
+    <span class="com">// The value returned from the flag.String() function is a pointer to the flag</span>
+    <span class="com">// value, not the value itself. So we need to dereference the pointer (i.e.</span>
+    <span class="com">// prefix it with the * symbol) before using it. Note that we're using the</span>
+    <span class="com">// log.Printf() function to interpolate the address with the log message.</span>
+    log.Printf(<span class="str">"Starting server on %s"</span>, *addr)
+    err := http.ListenAndServe(*addr, mux)
+    log.Fatal(err)
+}</pre>
+</div>
+
+<p>Three things worth knowing about flags: they are optional (omitting <code>-addr</code> falls back to
+  <code>":4000"</code>), they convert types automatically (<code>flag.Int()</code>, <code>flag.Bool()</code>,
+  <code>flag.Float64()</code> fail fast on a bad value), and <code>-help</code> lists them all with the help text —
+  free documentation:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go run ./cmd/web -addr=":9999"</span>
+<span class="out">2022/01/29 15:50:20 Starting server on :9999</span>
+
+<span class="prompt">$ go run ./cmd/web -help</span>
+<span class="out">Usage of /tmp/go-build3672328037/b001/exe/web:
+  -addr string
+        HTTP network address (default ":4000")</span></pre>
+</div>
+
+<p class="note"><b>Additional information.</b> Environment variables look tempting, but <code>os.Getenv()</code>
+  gives no default, no <code>-help</code> and always a string. The book’s compromise is to pass the environment
+  variable <em>as</em> a flag: <code>go run ./cmd/web -addr=$SNIPPETBOX_ADDR</code>. Booleans accept a bare
+  <code>-flag</code> (equal to <code>-flag=true</code>), and <code>flag.StringVar()</code> can parse directly into a
+  field of a config struct. Ports 0–1023 need root, and give
+  <code>bind: permission denied</code>.</p>
+
+<p><b>Live:</b> the demo server implements the same flag set. <code>/config</code> shows the values it actually
+  parsed; <code>node web/server.js -help</code> prints the equivalent usage block.</p>
+
+<h2 class="sec" id="s32">3.2 · Leveled logging</h2>
+<p>So far logging uses the standard logger via <code>log.Printf()</code> and <code>log.Fatal()</code>, which stamps
+  everything the same way and sends it all to stderr. The application has two kinds of message — informational and
+  errors — and they deserve different treatment: <code>INFO</code> to stdout, <code>ERROR</code> to stderr with the
+  calling file and line. Two custom loggers do it:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go — the two loggers</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Use log.New() to create a logger for writing information messages. This takes</span>
+<span class="com">// three parameters: the destination to write the logs to (os.Stdout), a string</span>
+<span class="com">// prefix for message (INFO followed by a tab), and flags to indicate what</span>
+<span class="com">// additional information to include (local date and time). Note that the flags</span>
+<span class="com">// are joined using the bitwise OR operator |.</span>
+infoLog := log.New(os.Stdout, <span class="str">"INFO\t"</span>, log.Ldate|log.Ltime)
+
+<span class="com">// Create a logger for writing error messages in the same way, but use stderr as</span>
+<span class="com">// the destination and use the log.Lshortfile flag to include the relevant</span>
+<span class="com">// file name and line number.</span>
+errorLog := log.New(os.Stderr, <span class="str">"ERROR\t"</span>, log.Ldate|log.Ltime|log.Lshortfile)
+
+infoLog.Printf(<span class="str">"Starting server on %s"</span>, *addr)
+err := http.ListenAndServe(*addr, mux)
+errorLog.Fatal(err)</pre>
+</div>
+
+<p>Running a second copy of the server produces the two prefixes side by side, and note the
+  <code>main.go:37</code> on the error line:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — the address is already in use</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go run ./cmd/web</span>
+<span class="out">INFO    2022/01/29 16:00:50 Starting server on :4000
+</span><span class="prompt">ERROR   2022/01/29 16:00:50 main.go:37: listen tcp :4000: bind: address already in use</span>
+<span class="out">exit status 1</span></pre>
+</div>
+
+<p>Because the loggers write to the standard streams, logging stays decoupled from the application: the execution
+  environment decides where the output ends up, simply by redirecting it.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — redirecting the streams</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go run ./cmd/web &gt;&gt;/tmp/info.log 2&gt;&gt;/tmp/error.log</span></pre>
+</div>
+
+<p>One loose end: Go’s HTTP server logs its own problems with the standard logger. Wrapping the server in an
+  <code>http.Server</code> struct lets it share <code>errorLog</code>:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go — replacing ListenAndServe()</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Initialize a new http.Server struct. We set the Addr and Handler fields so</span>
+<span class="com">// that the server uses the same network address and routes as before, and set</span>
+<span class="com">// the ErrorLog field so that the server now uses the custom errorLog logger in</span>
+<span class="com">// the event of any problems.</span>
+srv := &amp;http.Server{
+    Addr:     *addr,
+    ErrorLog: errorLog,
+    Handler:  mux,
+}
+
+infoLog.Printf(<span class="str">"Starting server on %s"</span>, *addr)
+err := srv.ListenAndServe()
+errorLog.Fatal(err)</pre>
+</div>
+
+<p class="note"><b>Additional information.</b> Avoid <code>Panic()</code> and <code>Fatal()</code> outside
+  <code>main()</code> — return errors instead. Loggers from <code>log.New()</code> are concurrency-safe, so one
+  logger can be shared across goroutines and handlers; if several loggers share a destination, that
+  <code>Write()</code> must be safe too. <code>log.Llongfile</code> gives the full path and <code>log.LUTC</code>
+  forces UTC timestamps.</p>
+
+<p><b>Live:</b> <code>/logs</code> streams this server’s real stdout/stderr output — <code>INFO</code> lines without a
+  file reference, <code>ERROR</code> lines with one, exactly like the book.</p>
+
+<h2 class="sec" id="s33">3.3 · Dependency injection</h2>
+<p>The <code>home</code> handler still calls <code>log.Print()</code>, i.e. the standard logger, instead of the new
+  <code>errorLog</code>. How does a handler in <code>handlers.go</code> reach a value created in <code>main()</code>?
+  The same question applies to every future dependency: a database pool, a template cache, a session manager.</p>
+<p>Globals are the simplest answer and the wrong one — they are implicit, error-prone and hard to test. Instead, put
+  the dependencies in a struct and make the handlers methods on it:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go — the application struct</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Define an application struct to hold the application-wide dependencies for the</span>
+<span class="com">// web application. For now we'll only include fields for the two custom loggers, but</span>
+<span class="com">// we'll add more to it as the build progresses.</span>
+<span class="kw">type</span> application <span class="kw">struct</span> {
+    errorLog *log.Logger
+    infoLog  *log.Logger
+}
+
+<span class="kw">func</span> main() {
+    ...
+    <span class="com">// Initialize a new instance of our application struct, containing the</span>
+    <span class="com">// dependencies.</span>
+    app := &amp;application{
+        errorLog: errorLog,
+        infoLog:  infoLog,
+    }
+
+    mux := http.NewServeMux()
+    fileServer := http.FileServer(http.Dir(<span class="str">"./ui/static/"</span>))
+    mux.Handle(<span class="str">"/static/"</span>, http.StripPrefix(<span class="str">"/static"</span>, fileServer))
+
+    mux.HandleFunc(<span class="str">"/"</span>, app.home)
+    mux.HandleFunc(<span class="str">"/snippet/view"</span>, app.snippetView)
+    mux.HandleFunc(<span class="str">"/snippet/create"</span>, app.snippetCreate)
+    ...
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — methods, not functions</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Change the signature of the home handler so it is defined as a method against</span>
+<span class="com">// *application.</span>
+<span class="kw">func</span> (app *application) home(w http.ResponseWriter, r *http.Request) {
+    ...
+    ts, err := template.ParseFiles(files...)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="com">// Because the home handler function is now a method against application</span>
+        <span class="com">// it can access its fields, including the error logger. We'll write the log</span>
+        <span class="com">// message to this instead of the standard logger.</span>
+        app.errorLog.Print(err.Error())
+        http.Error(w, <span class="str">"Internal Server Error"</span>, 500)
+        <span class="kw">return</span>
+    }
+    ...
+}</pre>
+</div>
+
+<p>It looks like ceremony for two loggers — and the book admits as much — but the pattern pays off as the struct
+  grows. To prove it works, the book deliberately breaks the app: rename <code>home.tmpl</code> and request the home
+  page.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ mv ui/html/pages/home.tmpl ui/html/pages/home.bak</span>
+<span class="prompt">$ go run ./cmd/web</span>
+<span class="out">INFO    2022/01/29 16:12:36 Starting server on :4000
+</span><span class="prompt">ERROR   2022/01/29 16:12:40 handlers.go:29: open ./ui/html/pages/home.tmpl: no such file or directory</span></pre>
+</div>
+
+<p>The <code>ERROR</code> prefix and the <code>handlers.go</code> reference prove the logger travelled from
+  <code>main()</code> into the handler as a dependency. (The book leaves the error in place — the next section needs
+  it.)</p>
+
+<p class="note"><b>Additional information.</b> This pattern does not work when handlers live in several packages. The
+  alternative is a <code>config</code> package with an exported <code>Application</code> struct, and handlers as
+  closures: <code>examplePackage.ExampleHandler(app)</code> returns an <code>http.HandlerFunc</code> that closes over
+  the struct.</p>
+
+<p><b>Live:</b> <code>/break</code> toggles exactly this failure. Switch it on, request <code>/home</code>, and the
+  log shows the <code>ERROR</code> line with the handler’s file and line.</p>
+
+<h2 class="sec" id="s34">3.4 · Centralized error handling</h2>
+<p>Error handling now repeats itself in every handler. Three small helpers on the application struct fix that —
+  <code>serverError</code> logs the error plus a stack trace and sends a generic 500, <code>clientError</code> sends
+  any 4xx/5xx with its standard description, and <code>notFound</code> wraps the 404 case.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/helpers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"fmt"</span>
+    <span class="str">"net/http"</span>
+    <span class="str">"runtime/debug"</span>
+)
+
+<span class="com">// The serverError helper writes an error message and stack trace to the errorLog,</span>
+<span class="com">// then sends a generic 500 Internal Server Error response to the user.</span>
+<span class="kw">func</span> (app *application) serverError(w http.ResponseWriter, err <span class="kw">error</span>) {
+    trace := fmt.Sprintf(<span class="str">"%s\n%s"</span>, err.Error(), debug.Stack())
+    app.errorLog.Print(trace)
+    http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+}
+
+<span class="com">// The clientError helper sends a specific status code and corresponding description</span>
+<span class="com">// to the user. We'll use this later in the book to send responses like 400 "Bad</span>
+<span class="com">// Request" when there's a problem with the request that the user sent.</span>
+<span class="kw">func</span> (app *application) clientError(w http.ResponseWriter, status <span class="kw">int</span>) {
+    http.Error(w, http.StatusText(status), status)
+}
+
+<span class="com">// For consistency, we'll also implement a notFound helper. This is simply a</span>
+<span class="com">// convenience wrapper around clientError which sends a 404 Not Found response to</span>
+<span class="com">// the user.</span>
+<span class="kw">func</span> (app *application) notFound(w http.ResponseWriter) {
+    app.clientError(w, http.StatusNotFound)
+}</pre>
+</div>
+
+<p><code>debug.Stack()</code> captures the current goroutine’s execution path, which is what makes an error message
+  debuggable; <code>http.StatusText()</code> turns <code>400</code> into <code>"Bad Request"</code> for you. The
+  handlers then shrink to calls like <code>app.serverError(w, err)</code>, <code>app.notFound(w)</code> and
+  <code>app.clientError(w, http.StatusMethodNotAllowed)</code>.</p>
+
+<p>The first attempt has a flaw. The log line now reports <code>helpers.go:13</code> — the place the message is
+  written — rather than the handler that hit the error:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — wrong origin</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go run ./cmd/web</span>
+<span class="out">INFO    2022/01/29 16:22:14 Starting server on :4000
+</span><span class="prompt">ERROR   2022/01/29 16:22:19 helpers.go:13: open ./ui/html/pages/home.tmpl: no such file or directory</span>
+<span class="out">goroutine 6 [running]:
+runtime/debug.Stack()
+        /usr/local/go/src/runtime/debug/stack.go:24 +0x65
+main.(*application).serverError(...)
+        /home/alex/Desktop/snippetbox.v2/cmd/web/helpers.go:12 +0x66
+main.(*application).home(...)
+        /home/alex/Desktop/snippetbox.v2/cmd/web/handlers.go:24 +0x194
+...</span></pre>
+</div>
+
+<p>The fix is <code>Output()</code> with a calldepth of 2, which tells the logger to report the caller one frame
+  further up:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/helpers.go — corrected</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (app *application) serverError(w http.ResponseWriter, err <span class="kw">error</span>) {
+    trace := fmt.Sprintf(<span class="str">"%s\n%s"</span>, err.Error(), debug.Stack())
+    app.errorLog.Output(2, trace)
+    http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal — correct origin</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go run ./cmd/web</span>
+<span class="out">INFO    2022/01/29 16:24:00 Starting server on :4000
+</span><span class="prompt">ERROR   2022/01/29 16:24:02 handlers.go:24: open ./ui/html/pages/home.tmpl: no such file or directory</span></pre>
+</div>
+
+<p>The deliberate error is no longer needed: <code>mv ui/html/pages/home.bak ui/html/pages/home.tmpl</code>.</p>
+
+<h2 class="sec" id="s35">3.5 · Isolating the application routes</h2>
+<p><code>main()</code> is getting crowded. The route declarations move into their own file, as a method on the
+  application struct:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/routes.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> main
+
+<span class="kw">import</span> <span class="str">"net/http"</span>
+
+<span class="com">// The routes() method returns a servemux containing our application routes.</span>
+<span class="kw">func</span> (app *application) routes() *http.ServeMux {
+    mux := http.NewServeMux()
+
+    fileServer := http.FileServer(http.Dir(<span class="str">"./ui/static/"</span>))
+    mux.Handle(<span class="str">"/static/"</span>, http.StripPrefix(<span class="str">"/static"</span>, fileServer))
+
+    mux.HandleFunc(<span class="str">"/"</span>, app.home)
+    mux.HandleFunc(<span class="str">"/snippet/view"</span>, app.snippetView)
+    mux.HandleFunc(<span class="str">"/snippet/create"</span>, app.snippetCreate)
+
+    <span class="kw">return</span> mux
+}</pre>
+</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go — the whole function, at last</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> main() {
+    addr := flag.String(<span class="str">"addr"</span>, <span class="str">":4000"</span>, <span class="str">"HTTP network address"</span>)
+
+    flag.Parse()
+
+    infoLog := log.New(os.Stdout, <span class="str">"INFO\t"</span>, log.Ldate|log.Ltime)
+    errorLog := log.New(os.Stderr, <span class="str">"ERROR\t"</span>, log.Ldate|log.Ltime|log.Lshortfile)
+
+    app := &amp;application{
+        errorLog: errorLog,
+        infoLog:  infoLog,
+    }
+
+    srv := &amp;http.Server{
+        Addr:     *addr,
+        ErrorLog: errorLog,
+        <span class="com">// Call the new app.routes() method to get the servemux containing our routes.</span>
+        Handler: app.routes(),
+    }
+
+    infoLog.Printf(<span class="str">"Starting server on %s"</span>, *addr)
+    err := srv.ListenAndServe()
+    errorLog.Fatal(err)
+}</pre>
+</div>
+
+<p>And with that, <code>main()</code> does exactly three things: parse configuration, establish dependencies, run
+  the server. Everything else now has a home.</p>
+
+<h2 class="sec" id="ch3-demo">Chapter 3, running live</h2>
+<p>The demo server implements the same five refactors, and exposes them so you can watch them work:</p>
+
+<div class="demo">
+  <div class="demo__head">
+    <h3>Chapter 3 controls</h3>
+    <span class="live"><i></i><span id="ch3State">connecting…</span></span>
+    <a class="btn" href="http://localhost:3000/logs" target="_blank" rel="noopener" style="margin-left:auto">Open the log stream ↗</a>
+  </div>
+  <div class="demo__body">
+    <p style="margin:0 0 10px"><strong>3.2 Leveled logging</strong>
+      <span style="color:#7b8b93;font-size:14px">— INFO to stdout, ERROR to stderr with file:line</span></p>
+    <div class="row">
+      <button class="btn btn--green" data-ch3="traffic">Generate traffic</button>
+      <button class="btn" data-ch3="logs">Read /api/logs</button>
+    </div>
+    <div class="resp" data-ch3-slot="logs" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>3.3 &amp; 3.4 Dependency injection and centralised errors</strong>
+      <span style="color:#7b8b93;font-size:14px">— the deliberate missing template from page 77</span></p>
+    <div class="row">
+      <button class="btn" data-ch3="break-on">Break home.tmpl</button>
+      <button class="btn" data-ch3="home">GET /home</button>
+      <button class="btn" data-ch3="break-off">Restore</button>
+    </div>
+    <div class="resp" data-ch3-slot="home" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>3.1 Configuration</strong>
+      <span style="color:#7b8b93;font-size:14px">— the flags this server parsed</span></p>
+    <div class="row">
+      <button class="btn" data-ch3="config">Read /config</button>
+      <a class="btn" href="http://localhost:3000/config" target="_blank" rel="noopener">Open the config page</a>
+    </div>
+    <div class="resp" data-ch3-slot="config" hidden></div>
+  </div>
+  <div class="demo__foot">
+    <span>Pages: <code>/logs</code> · <code>/config</code> · <code>/break</code></span>
+    <a href="http://localhost:3000/break" target="_blank" rel="noopener">deliberate error</a>
+  </div>
+</div>
+<p style="font-size:14px;color:#7b8b93">Requests are logged as they happen, so “Generate traffic” then “Read
+  /api/logs” shows new <code>INFO</code> entries; “Break home.tmpl” makes <code>GET /home</code> return
+  <code>500</code> while the log records the handler’s file and line plus a stack trace.</p>
+
+<h2 class="sec" id="ch3-takeaways">What chapter 3 leaves you with</h2>
+<table>
+  <thead><tr><th>Concept</th><th>Where it is demonstrated live</th></tr></thead>
+  <tbody>
+    <tr><td><code>flag.String</code> / <code>flag.Parse</code>, defaults, <code>-help</code></td><td><code>/config</code>, <code>node web/server.js -help</code></td></tr>
+    <tr><td>Leveled loggers, <code>Lshortfile</code>, stream redirection</td><td><code>/logs</code>, <code>/api/logs</code></td></tr>
+    <tr><td><code>http.Server</code> with <code>ErrorLog</code></td><td>server start-up and bind errors</td></tr>
+    <tr><td>Dependency injection via <code>*application</code></td><td><code>/break</code> → handler logs through the injected logger</td></tr>
+    <tr><td><code>serverError</code> / <code>clientError</code> / <code>notFound</code></td><td>500 (deliberate), 404 (<code>/snippet/view</code>), 405</td></tr>
+    <tr><td><code>Output(2, …)</code> to report the caller’s frame</td><td>the <code>ERROR</code> line names the handler, not the helper</td></tr>
+    <tr><td><code>app.routes()</code></td><td>one place declaring every route the demo serves</td></tr>
+  </tbody>
+</table>
+<p>Chapter 4, <em>Database-driven responses</em>, starts on page 86 and gives the application its first real
+  dependency — a MySQL connection pool.</p>
 </article></div>
 <footer>
   <div class="wrap">
-    Summary of chapters 1 and 2 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
+    Summary of chapters 1–3 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
     Alex Edwards (2nd edition, v2.20.0), generated from <code>Let’s Go [Alex Edwards].pdf</code> in this repository:
-    pages 6–10 for chapter 1 and pages 11–61 for chapter 2. All 15 figures were extracted with PyMuPDF and inlined as
-    base64, so this file needs no network access.<br>
-    Chapter-2 live demo: <code>web/snippetbox/</code> — the book’s own templates and static directory, served by
+    pages 6–10 for chapter 1, 11–61 for chapter 2 and 62–85 for chapter 3. All 15 figures — chapter 3 has none —
+    were extracted with PyMuPDF and inlined as base64, so this file needs no network access.<br>
+    Live demo: <code>web/snippetbox/</code> — the book’s own templates, static directory, flags and loggers, served by
     <code>web/server.js</code> on port 3000. Rebuild this page with
     <code>python3 build_chapter1.py</code>.
   </div>
 </footer>
 <div class="toast" id="toast"></div>
-
 <script>
+/* Page script for chapter-one.html — the chapters 1-3 summary.
+ *
+ * Kept as a real .js file (rather than a Python string) so the escaping is
+ * unambiguous; build_chapter1.py inlines it into the generated page. */
+
 (function () {
   var DEMO = 'http://localhost:3000';
   if (location.port === '3000') DEMO = location.origin;
@@ -1205,26 +1670,32 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
     a.href = DEMO + a.getAttribute('href').replace('http://localhost:3000', '');
   });
 
-  var esc = function (s) {
+  function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  };
+  }
   function statusClass(s) { return s < 300 ? 'ok' : s < 400 ? 'warn' : 'bad'; }
 
   function request(spec) {
-    return fetch(DEMO + spec.path, { method: spec.method || 'GET', headers: spec.headers || {}, cache: 'no-store' })
-      .then(function (res) {
-        return res.text().then(function (body) {
-          var head = [];
-          ['content-type', 'content-length', 'allow', 'last-modified', 'content-range', 'accept-ranges', 'location', 'date']
-            .forEach(function (h) { var v = res.headers.get(h); if (v) head.push(h + ': ' + v); });
-          return { status: res.status, text: res.statusText, body: body, head: head, spec: spec };
+    return fetch(DEMO + spec.path, {
+      method: spec.method || 'GET',
+      headers: spec.headers || {},
+      cache: 'no-store'
+    }).then(function (res) {
+      return res.text().then(function (body) {
+        var head = [];
+        ['content-type', 'content-length', 'allow', 'last-modified', 'content-range',
+         'accept-ranges', 'location', 'date'].forEach(function (h) {
+          var v = res.headers.get(h);
+          if (v) head.push(h + ': ' + v);
         });
+        return { status: res.status, text: res.statusText, body: body, head: head, spec: spec };
       });
+    });
   }
 
   function paint(slot, r, method, path) {
     var shown = r.body;
-    if (shown.length > 1400) shown = shown.slice(0, 1400) + '\n\n… (' + r.body.length + ' bytes total)';
+    if (shown.length > 1400) shown = shown.slice(0, 1400) + ' ... (' + r.body.length + ' bytes total)';
     slot.hidden = false;
     slot.innerHTML =
       '<div class="resp__bar"><span class="status ' + statusClass(r.status) + '">' + r.status + ' ' + esc(r.text) + '</span>' +
@@ -1234,14 +1705,26 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
       '<div class="meta">$ curl -i ' + (method !== 'GET' ? '-X ' + esc(method) + ' ' : '') + esc(DEMO + path) + '</div>';
   }
 
-  // ---- chapter 2 buttons -------------------------------------------------
+  function message(slot, status, label, note) {
+    slot.hidden = false;
+    slot.innerHTML =
+      '<div class="resp__bar"><span class="status ' + statusClass(status) + '">' + esc(status + ' ' + label) + '</span></div>' +
+      '<pre>' + esc(note) + '</pre>';
+  }
+
+  function fail(slot, err) {
+    message(slot, 0, 'demo unreachable', 'Start the server with:  node web/server.js\n\n' + err.message);
+  }
+
+  /* ------------------------------------------------------------ chapter 2 */
+
   var CH2 = {
-    home:       { path: '/home', method: 'GET' },
-    'static':   { path: '/static/', method: 'GET' },
-    css:        { path: '/static/css/main.css', method: 'GET' },
-    '304':      { path: '/static/css/main.css', method: 'GET', conditional: true },
-    range:      { path: '/static/img/logo.svg', method: 'GET', range: 'bytes=0-49' },
-    traversal:  { path: '/static/../server.js', method: 'GET' }
+    home: { path: '/home' },
+    'static': { path: '/static/' },
+    css: { path: '/static/css/main.css' },
+    '304': { path: '/static/css/main.css', conditional: true },
+    range: { path: '/static/img/logo.svg', range: 'bytes=0-49' },
+    traversal: { path: '/static/../server.js' }
   };
 
   document.querySelectorAll('[data-ch2]').forEach(function (btn) {
@@ -1251,21 +1734,22 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
       var slot = document.querySelector(key === 'home' ? '[data-ch2-slot="home"]' : '[data-ch2-slot="static"]');
       btn.disabled = true;
       slot.hidden = false;
-      slot.innerHTML = '<div class="resp__bar"><span class="status">…</span><span style="color:#6d7c84">sending request</span></div>';
+      slot.innerHTML = '<div class="resp__bar"><span class="status">...</span>' +
+        '<span style="color:#6d7c84">sending request</span></div>';
 
-      var go = function (headers) {
+      function go(headers) {
         spec.headers = headers || {};
         request(spec).then(function (r) {
-          paint(slot, r, spec.method, spec.path);
+          paint(slot, r, spec.method || 'GET', spec.path);
           if (key === '304') {
             slot.querySelector('.meta').insertAdjacentHTML('afterend',
-              '<div class="meta">Conditional request: the demo fetched Last-Modified first, then asked again with If-Modified-Since. Go\'s http.FileServer answers 304 Not Modified.</div>');
+              '<div class="meta">Conditional request: the page fetched Last-Modified first, then asked again ' +
+              'with If-Modified-Since. Go\'s http.FileServer answers 304 Not Modified.</div>');
           }
         }).catch(function (err) {
-          slot.innerHTML = '<div class="resp__bar"><span class="status bad">demo server unreachable</span></div>' +
-            '<pre>Start it with:  node web/server.js\n\n' + esc(err.message) + '</pre>';
+          fail(slot, err);
         }).then(function () { btn.disabled = false; });
-      };
+      }
 
       if (spec.conditional) {
         fetch(DEMO + spec.path, { cache: 'no-store' }).then(function (res) {
@@ -1279,7 +1763,89 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
     });
   });
 
-  // ---- chapter 1 buttons -------------------------------------------------
+  /* ------------------------------------------------------------ chapter 3 */
+
+  var CH3_SLOT = { traffic: 'logs', logs: 'logs', config: 'config', home: 'home' };
+
+  document.querySelectorAll('[data-ch3]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key = btn.getAttribute('data-ch3');
+      var slot = document.querySelector('[data-ch3-slot="' + (CH3_SLOT[key] || 'home') + '"]');
+      btn.disabled = true;
+      var done = function () { btn.disabled = false; };
+
+      if (key === 'traffic') {
+        Promise.all([
+          fetch(DEMO + '/home'),
+          fetch(DEMO + '/static/css/main.css'),
+          fetch(DEMO + '/nope')
+        ]).then(function () {
+          return fetch(DEMO + '/api/logs', { cache: 'no-store' });
+        }).then(function (r) {
+          return r.json();
+        }).then(function (entries) {
+          var text = entries.slice(-6).map(function (e) {
+            var level = (e.level + '      ').slice(0, 7);
+            var site = (e.site || '').padEnd(18);
+            return level + ' ' + site + ' ' + e.msg.split('\n')[0];
+          }).join('\n');
+          message(slot, 200, 'log entries', text || '(no entries yet)');
+        }).catch(function (err) {
+          fail(slot, err);
+        }).then(done);
+        return;
+      }
+
+      if (key === 'logs') {
+        fetch(DEMO + '/api/logs', { cache: 'no-store' }).then(function (r) {
+          return r.json();
+        }).then(function (entries) {
+          message(slot, 200, entries.length + ' entries', JSON.stringify(entries.slice(-4), null, 2));
+        }).catch(function (err) {
+          fail(slot, err);
+        }).then(done);
+        return;
+      }
+
+      if (key === 'break-on' || key === 'break-off') {
+        fetch(DEMO + '/break?toggle=' + (key === 'break-on' ? 'on' : 'off'), { cache: 'no-store' })
+          .then(function (r) {
+            message(slot, r.status,
+              key === 'break-on' ? 'deliberate error enabled' : 'template restored',
+              key === 'break-on'
+                ? 'ui/html/pages/home.tmpl is now treated as missing.\nPress "GET /home" — the handler will ' +
+                  'log an ERROR with its own file and line, and return a generic 500.'
+                : 'ui/html/pages/home.tmpl is available again.');
+          }).catch(function (err) {
+            fail(slot, err);
+          }).then(done);
+        return;
+      }
+
+      var path = key === 'config' ? '/config' : '/home';
+      fetch(DEMO + path, { cache: 'no-store' }).then(function (r) {
+        return r.text().then(function (body) { return [r, body]; });
+      }).then(function (pair) {
+        var res = pair[0];
+        var body = pair[1];
+        if (key === 'config') {
+          var rows = body.match(/<code>(-[a-z-]+)<\/code><\/td><td><code>([^<]+)</g) || [];
+          body = rows.map(function (row) {
+            var m = /<code>(-[a-z-]+)<\/code><\/td><td><code>([^<]+)</.exec(row);
+            return m ? m[1] + ' = ' + m[2] : row;
+          }).join('\n') || body.slice(0, 800);
+        } else if (body.length > 1200) {
+          body = body.slice(0, 1200) + ' ... (' + body.length + ' bytes total)';
+        }
+        message(slot, res.status, res.statusText, body);
+      }).catch(function (err) {
+        fail(slot, err);
+      }).then(done);
+    });
+  });
+
+  /* ------------------------------------------------------------ chapter 1 */
+
   function slotFor(key) {
     if (key === 'GET /') return document.querySelector('[data-slot="home"]');
     if (key.indexOf('/snippet/view') > -1) return document.querySelector('[data-slot="view"]');
@@ -1288,11 +1854,13 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
 
   function run(spec, btn) {
     var parts = spec.split(' ');
-    var method = parts[0], path = parts[1];
+    var method = parts[0];
+    var path = parts[1];
     var slot = slotFor(spec);
     btn.disabled = true;
     slot.hidden = false;
-    slot.innerHTML = '<div class="resp__bar"><span class="status">…</span><span style="color:#6d7c84">sending request</span></div>';
+    slot.innerHTML = '<div class="resp__bar"><span class="status">...</span>' +
+      '<span style="color:#6d7c84">sending request</span></div>';
     request({ path: path, method: method }).then(function (r) {
       paint(slot, r, method, path);
       if (r.status === 405) {
@@ -1300,9 +1868,7 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
           '<div class="meta">Note the Allow header — the book adds it explicitly in chapter 2.4.</div>');
       }
     }).catch(function (err) {
-      slot.innerHTML = '<div class="resp__bar"><span class="status bad">demo server unreachable</span></div>' +
-        '<pre>Start it with:  node web/server.js\n\n' + esc(err.message) + '</pre>' +
-        '<div class="meta">The summary, figures and code samples still work without the server.</div>';
+      fail(slot, err);
     }).then(function () { btn.disabled = false; });
   }
 
@@ -1310,28 +1876,31 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
     btn.addEventListener('click', function () { run(btn.getAttribute('data-run'), btn); });
   });
 
-  // ---- live badges -------------------------------------------------------
+  /* --------------------------------------------------------- live badges */
+
   function badge(id) {
     var el = document.getElementById(id);
     if (!el) return;
-    var ping = function () {
+    function ping() {
       fetch(DEMO + '/healthz', { cache: 'no-store' })
         .then(function (r) { el.textContent = r.ok ? 'demo running' : 'demo error'; })
         .catch(function () { el.textContent = 'demo offline'; });
-    };
+    }
     ping();
     setInterval(ping, 10000);
   }
   badge('demoState');
   badge('ch2State');
+  badge('ch3State');
 
-  // ---- the replica form --------------------------------------------------
+  /* ------------------------------------------------------- replica form */
+
   var pub = document.getElementById('publishBtn');
   var toast = document.getElementById('toast');
   if (pub) {
     pub.addEventListener('click', function () {
       var title = document.getElementById('dTitle').value.trim();
-      pub.textContent = title ? 'Publishing “' + title.slice(0, 22) + '”…' : 'Publishing…';
+      pub.textContent = title ? 'Publishing "' + title.slice(0, 22) + '"...' : 'Publishing...';
       setTimeout(function () {
         pub.textContent = 'Publish snippet';
         toast.textContent = 'This replica form does not store anything — snippets arrive in chapter 8.';
@@ -1341,20 +1910,21 @@ mux.HandleFunc(<span class="str">"/"</span>, home)              <span class="com
     });
   }
 
-  // ---- Go syntax highlighting for the static samples ---------------------
+  /* ------------------------------------------- Go syntax highlighting */
+
   var KW = /\b(package|import|func|return|if|else|for|range|var|const|type|struct|interface|map|string|int|bool|nil|true|false|go|defer|switch|case|break|continue|make|new|byte|error|any)\b/g;
+
   document.querySelectorAll('pre.code').forEach(function (pre) {
     if (pre.classList.contains('is-highlighted')) return;
     pre.classList.add('is-highlighted');
     var h = esc(pre.textContent);
     h = h.replace(/(\/\/[^\n]*)/g, '<span class="com">$1</span>');
-    h = h.replace(/(&#39;[^&\n]*&#39;)/g, '<span class="str">$1</span>');
     h = h.replace(/("(?:[^"\\\n]|\\.)*")/g, '<span class="str">$1</span>');
     h = h.replace(KW, '<span class="kw">$1</span>');
     pre.innerHTML = h;
   });
 })();
-</script>
 
+</script>
 </body>
 </html>

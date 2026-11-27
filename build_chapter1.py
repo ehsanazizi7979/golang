@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 Build chapter-one.html — a single self-contained page covering
-chapter 1 and chapter 2 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
+chapters 1-3 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
 
 Sources (all extracted from Let's Go [Alex Edwards].pdf in this directory)
 
   chapter 1   pp.  6-10   Introduction, Conventions, Prerequisites
   chapter 2   pp. 11-61   Foundations, sections 2.1 - 2.9
+  chapter 3   pp.  62-85  Configuration and error handling, sections 3.1 - 3.5
+                          (no figures in this chapter)
   main.go     p.  14      used by the live demo
 
 Figures
@@ -75,6 +77,12 @@ def verify_pages() -> None:
         41: "HTML templating and inheritance",
         51: "Serving static files",
         59: "http.Handler interface",
+        62: "Configuration and error handling",
+        63: "Managing configuration settings",
+        68: "Leveled logging",
+        73: "Dependency injection",
+        79: "Centralized error handling",
+        84: "Isolating the application routes",
     }
     for pno, needle in checks.items():
         text = doc[pno - 1].get_text()
@@ -206,15 +214,16 @@ HERO = f"""
 <div class="hero">
   <div class="wrap">
     <p class="kicker">Let’s Go · Alex Edwards · 2nd edition, v2.20.0</p>
-    <h1>Chapters 1 &amp; 2 — <span>Introduction</span><br>&amp; Foundations</h1>
+    <h1>Chapters 1–3 — <span>Introduction</span><br>&amp; Foundations &amp; Configuration</h1>
     <p>Build Snippetbox: a web app for pasting and sharing snippets of text. Chapter one sets the destination and
        the toolchain; chapter two builds the whole foundations of the app — modules, routing, headers, query
-       strings, project structure, templates and static files.</p>
+       strings, project structure, templates and static files. Chapter three adds nothing visible and makes
+       everything maintainable: flags, leveled logs, injected dependencies and centralised errors.</p>
     <div class="meta">
-      <span>56 pages of source (pp. 6–61)</span>
+      <span>80 pages of source (pp. 6–85)</span>
       <span>15 figures, all embedded</span>
       <span>Live demo on port {DEMO_PORT}</span>
-      <span>Reading time ≈ 25 min</span>
+      <span>Reading time ≈ 35 min</span>
     </div>
   </div>
 </div>
@@ -248,172 +257,20 @@ TOC = """
       <li><a href="#ch2-demo">Chapter 2 live</a></li>
       <li><a href="#ch2-takeaways">Takeaways</a></li>
     </ol>
+    <p class="part">Chapter 3 · Configuration</p>
+    <ol>
+      <li><a href="#s31">3.1 Configuration</a></li>
+      <li><a href="#s32">3.2 Leveled logging</a></li>
+      <li><a href="#s33">3.3 Dependency injection</a></li>
+      <li><a href="#s34">3.4 Centralised errors</a></li>
+      <li><a href="#s35">3.5 Routes</a></li>
+      <li><a href="#ch3-demo">Chapter 3 live</a></li>
+      <li><a href="#ch3-takeaways">Takeaways</a></li>
+    </ol>
   </nav>
 """
 
-SCRIPT = """
-<script>
-(function () {
-  var DEMO = 'http://localhost:__PORT__';
-  if (location.port === '__PORT__') DEMO = location.origin;
-  if (location.protocol === 'https:' && DEMO.indexOf('http://localhost') === 0) DEMO = location.origin;
-
-  // Point every absolute demo link at the right origin.
-  document.querySelectorAll('a[href^="http://localhost:__PORT__"]').forEach(function (a) {
-    a.href = DEMO + a.getAttribute('href').replace('http://localhost:__PORT__', '');
-  });
-
-  var esc = function (s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  };
-  function statusClass(s) { return s < 300 ? 'ok' : s < 400 ? 'warn' : 'bad'; }
-
-  function request(spec) {
-    return fetch(DEMO + spec.path, { method: spec.method || 'GET', headers: spec.headers || {}, cache: 'no-store' })
-      .then(function (res) {
-        return res.text().then(function (body) {
-          var head = [];
-          ['content-type', 'content-length', 'allow', 'last-modified', 'content-range', 'accept-ranges', 'location', 'date']
-            .forEach(function (h) { var v = res.headers.get(h); if (v) head.push(h + ': ' + v); });
-          return { status: res.status, text: res.statusText, body: body, head: head, spec: spec };
-        });
-      });
-  }
-
-  function paint(slot, r, method, path) {
-    var shown = r.body;
-    if (shown.length > 1400) shown = shown.slice(0, 1400) + '\\n\\n… (' + r.body.length + ' bytes total)';
-    slot.hidden = false;
-    slot.innerHTML =
-      '<div class="resp__bar"><span class="status ' + statusClass(r.status) + '">' + r.status + ' ' + esc(r.text) + '</span>' +
-        '<span style="margin-left:auto;color:#6d7c84">' + esc(method + ' ' + path) + '</span></div>' +
-      '<pre>' + (esc(shown) || '(empty body)') + '</pre>' +
-      '<div class="meta">' + r.head.map(esc).join('\\n') + '</div>' +
-      '<div class="meta">$ curl -i ' + (method !== 'GET' ? '-X ' + esc(method) + ' ' : '') + esc(DEMO + path) + '</div>';
-  }
-
-  // ---- chapter 2 buttons -------------------------------------------------
-  var CH2 = {
-    home:       { path: '/home', method: 'GET' },
-    'static':   { path: '/static/', method: 'GET' },
-    css:        { path: '/static/css/main.css', method: 'GET' },
-    '304':      { path: '/static/css/main.css', method: 'GET', conditional: true },
-    range:      { path: '/static/img/logo.svg', method: 'GET', range: 'bytes=0-49' },
-    traversal:  { path: '/static/../server.js', method: 'GET' }
-  };
-
-  document.querySelectorAll('[data-ch2]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var key = btn.getAttribute('data-ch2');
-      var spec = Object.assign({}, CH2[key]);
-      var slot = document.querySelector(key === 'home' ? '[data-ch2-slot="home"]' : '[data-ch2-slot="static"]');
-      btn.disabled = true;
-      slot.hidden = false;
-      slot.innerHTML = '<div class="resp__bar"><span class="status">…</span><span style="color:#6d7c84">sending request</span></div>';
-
-      var go = function (headers) {
-        spec.headers = headers || {};
-        request(spec).then(function (r) {
-          paint(slot, r, spec.method, spec.path);
-          if (key === '304') {
-            slot.querySelector('.meta').insertAdjacentHTML('afterend',
-              '<div class="meta">Conditional request: the demo fetched Last-Modified first, then asked again with If-Modified-Since. Go\\'s http.FileServer answers 304 Not Modified.</div>');
-          }
-        }).catch(function (err) {
-          slot.innerHTML = '<div class="resp__bar"><span class="status bad">demo server unreachable</span></div>' +
-            '<pre>Start it with:  node web/server.js\\n\\n' + esc(err.message) + '</pre>';
-        }).then(function () { btn.disabled = false; });
-      };
-
-      if (spec.conditional) {
-        fetch(DEMO + spec.path, { cache: 'no-store' }).then(function (res) {
-          go({ 'If-Modified-Since': res.headers.get('last-modified') || new Date().toUTCString() });
-        }).catch(function () { go({}); });
-      } else if (spec.range) {
-        go({ Range: spec.range });
-      } else {
-        go({});
-      }
-    });
-  });
-
-  // ---- chapter 1 buttons -------------------------------------------------
-  function slotFor(key) {
-    if (key === 'GET /') return document.querySelector('[data-slot="home"]');
-    if (key.indexOf('/snippet/view') > -1) return document.querySelector('[data-slot="view"]');
-    return document.querySelector('[data-slot="create"]');
-  }
-
-  function run(spec, btn) {
-    var parts = spec.split(' ');
-    var method = parts[0], path = parts[1];
-    var slot = slotFor(spec);
-    btn.disabled = true;
-    slot.hidden = false;
-    slot.innerHTML = '<div class="resp__bar"><span class="status">…</span><span style="color:#6d7c84">sending request</span></div>';
-    request({ path: path, method: method }).then(function (r) {
-      paint(slot, r, method, path);
-      if (r.status === 405) {
-        slot.querySelector('.meta').insertAdjacentHTML('afterend',
-          '<div class="meta">Note the Allow header — the book adds it explicitly in chapter 2.4.</div>');
-      }
-    }).catch(function (err) {
-      slot.innerHTML = '<div class="resp__bar"><span class="status bad">demo server unreachable</span></div>' +
-        '<pre>Start it with:  node web/server.js\\n\\n' + esc(err.message) + '</pre>' +
-        '<div class="meta">The summary, figures and code samples still work without the server.</div>';
-    }).then(function () { btn.disabled = false; });
-  }
-
-  document.querySelectorAll('[data-run]').forEach(function (btn) {
-    btn.addEventListener('click', function () { run(btn.getAttribute('data-run'), btn); });
-  });
-
-  // ---- live badges -------------------------------------------------------
-  function badge(id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    var ping = function () {
-      fetch(DEMO + '/healthz', { cache: 'no-store' })
-        .then(function (r) { el.textContent = r.ok ? 'demo running' : 'demo error'; })
-        .catch(function () { el.textContent = 'demo offline'; });
-    };
-    ping();
-    setInterval(ping, 10000);
-  }
-  badge('demoState');
-  badge('ch2State');
-
-  // ---- the replica form --------------------------------------------------
-  var pub = document.getElementById('publishBtn');
-  var toast = document.getElementById('toast');
-  if (pub) {
-    pub.addEventListener('click', function () {
-      var title = document.getElementById('dTitle').value.trim();
-      pub.textContent = title ? 'Publishing “' + title.slice(0, 22) + '”…' : 'Publishing…';
-      setTimeout(function () {
-        pub.textContent = 'Publish snippet';
-        toast.textContent = 'This replica form does not store anything — snippets arrive in chapter 8.';
-        toast.classList.add('on');
-        setTimeout(function () { toast.classList.remove('on'); }, 2600);
-      }, 700);
-    });
-  }
-
-  // ---- Go syntax highlighting for the static samples ---------------------
-  var KW = /\\b(package|import|func|return|if|else|for|range|var|const|type|struct|interface|map|string|int|bool|nil|true|false|go|defer|switch|case|break|continue|make|new|byte|error|any)\\b/g;
-  document.querySelectorAll('pre.code').forEach(function (pre) {
-    if (pre.classList.contains('is-highlighted')) return;
-    pre.classList.add('is-highlighted');
-    var h = esc(pre.textContent);
-    h = h.replace(/(\\/\\/[^\\n]*)/g, '<span class="com">$1</span>');
-    h = h.replace(/(&#39;[^&\\n]*&#39;)/g, '<span class="str">$1</span>');
-    h = h.replace(/("(?:[^"\\\\\\n]|\\\\.)*")/g, '<span class="str">$1</span>');
-    h = h.replace(KW, '<span class="kw">$1</span>');
-    pre.innerHTML = h;
-  });
-})();
-</script>
-"""
+SCRIPT = (ROOT / "content" / "page.js").read_text(encoding="utf-8").replace("__PORT__", str(DEMO_PORT))
 
 
 def build() -> str:
@@ -421,6 +278,7 @@ def build() -> str:
 
     ch1 = (ROOT / "content" / "chapter1.html").read_text(encoding="utf-8")
     ch2 = (ROOT / "content" / "chapter2.html").read_text(encoding="utf-8")
+    ch3 = (ROOT / "content" / "chapter3.html").read_text(encoding="utf-8")
 
     # chapter 1's hero/toc listed a "Where it goes next" section; keep its content
     # but retitle it so it reads as a bridge into chapter 2.
@@ -440,6 +298,8 @@ def build() -> str:
         + ch1.strip()
         + '\n<hr class="rule" id="chapter2">\n'
         + ch2.strip()
+        + '\n<hr class="rule" id="chapter3">\n'
+        + ch3.strip()
         + "\n</article></div>"
     )
 
@@ -448,7 +308,7 @@ def build() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Let&#39;s Go — chapters 1 &amp; 2 summary</title>
+<title>Let&#39;s Go — chapters 1–3 summary</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -456,17 +316,19 @@ def build() -> str:
 {body}
 <footer>
   <div class="wrap">
-    Summary of chapters 1 and 2 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
+    Summary of chapters 1–3 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
     Alex Edwards (2nd edition, v2.20.0), generated from <code>Let’s Go [Alex Edwards].pdf</code> in this repository:
-    pages 6–10 for chapter 1 and pages 11–61 for chapter 2. All 15 figures were extracted with PyMuPDF and inlined as
-    base64, so this file needs no network access.<br>
-    Chapter-2 live demo: <code>web/snippetbox/</code> — the book’s own templates and static directory, served by
+    pages 6–10 for chapter 1, 11–61 for chapter 2 and 62–85 for chapter 3. All 15 figures — chapter 3 has none —
+    were extracted with PyMuPDF and inlined as base64, so this file needs no network access.<br>
+    Live demo: <code>web/snippetbox/</code> — the book’s own templates, static directory, flags and loggers, served by
     <code>web/server.js</code> on port {DEMO_PORT}. Rebuild this page with
     <code>python3 build_chapter1.py</code>.
   </div>
 </footer>
 <div class="toast" id="toast"></div>
-{SCRIPT.replace('__PORT__', str(DEMO_PORT))}
+<script>
+{SCRIPT}
+</script>
 </body>
 </html>
 """
