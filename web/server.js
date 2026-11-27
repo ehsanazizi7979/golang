@@ -24,6 +24,7 @@ const chapter3 = require('./snippetbox/chapter3');
 const chapter4 = require('./snippetbox/chapter4');
 const chapter5 = require('./snippetbox/chapter5');
 const chapter6 = require('./snippetbox/chapter6');
+const chapter7 = require('./snippetbox/chapter7');
 const models = require('./snippetbox/models');
 
 // Chapter 3.1: configuration comes from command-line flags, parsed before
@@ -184,6 +185,7 @@ function layout(opts) {
   ${link('/db', 'Database')}
   ${link('/newsnippets', 'Templates')}
   ${link('/middleware', 'Middleware')}
+  ${link('/router', 'Router')}
   ${link('/logs', 'Logs')}
   <li class="right"><a href="/" target="_blank" rel="noopener">GET / <span class="muted">raw</span></a></li>
 </ul></nav>
@@ -415,6 +417,8 @@ function handler(req, res) {
   if (chapter5.handle(req, res, url, app, db)) return;
   // Chapter 6: the chain, panic recovery and alice.
   if (chapter6.handle(req, res, url, app)) return;
+  // Chapter 7: the same application on httprouter, with clean URLs.
+  if (chapter7.handle(req, res, url, app, db)) return;
   if (chapter2.handle(req, res, url, config, app)) return;
 
   // 1. The home route.

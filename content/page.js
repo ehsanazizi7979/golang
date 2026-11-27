@@ -1,4 +1,4 @@
-/* Page script for chapter-one.html — the chapters 1-6 summary.
+/* Page script for chapter-one.html — the chapters 1-7 summary.
  *
  * Kept as a real .js file (rather than a Python string) so the escaping is
  * unambiguous; build_chapter1.py inlines it into the generated page. */
@@ -507,6 +507,122 @@
     });
   });
 
+  /* ------------------------------------------------------------ chapter 7 */
+
+  var CH7_SLOT = { view: 'routing', wrongmethod: 'routing', missing: 'routing', create: 'routing',
+                   probe1: 'probe', probe2: 'probe', probe3: 'probe', probe4: 'probe' };
+
+  function probeRoute(path, method) {
+    return fetch(DEMO + '/api/router/match?path=' + encodeURIComponent(path) + '&method=' + method,
+      { cache: 'no-store' }).then(function (r) { return r.json(); });
+  }
+
+  function renderProbe(d) {
+    var lines = [d.method + ' ' + d.path, ''];
+    lines.push('status:  ' + d.status);
+    if (d.pattern) lines.push('pattern: ' + d.pattern);
+    if (d.params && d.params.length) {
+      lines.push('params:  ' + d.params.map(function (x) {
+        return x.key + '=' + JSON.stringify(x.value);
+      }).join(', '));
+    }
+    if (d.allow) lines.push('Allow:   ' + d.allow);
+    if (d.note) lines.push('', d.note);
+    return lines.join('\n');
+  }
+
+  document.querySelectorAll('[data-ch7]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key = btn.getAttribute('data-ch7');
+      var slot = document.querySelector('[data-ch7-slot="' + (CH7_SLOT[key] || 'routing') + '"]');
+      btn.disabled = true;
+      var done = function () { btn.disabled = false; };
+
+      var probes = {
+        probe1: ['/snippet/view/1', 'GET'],
+        probe2: ['/snippet/view/abc', 'GET'],
+        probe3: ['/snippet/view/1/extra', 'GET'],
+        probe4: ['/snippet/create', 'POST']
+      };
+      if (probes[key]) {
+        probeRoute(probes[key][0], probes[key][1]).then(function (d) {
+          message(slot, d.status, 'router.match', renderProbe(d));
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'view') {
+        fetch(DEMO + '/clean/snippet/view/1', { cache: 'no-store' }).then(function (r) {
+          return r.text().then(function (body) { return [r, body]; });
+        }).then(function (pair) {
+          var main = /<main>([\s\S]*?)<\/main>/.exec(pair[1]);
+          var title = /<title>([\s\S]*?)<\/title>/.exec(pair[1]);
+          message(slot, pair[0].status, 'clean URL resolved',
+            '<title>' + (title ? title[1].trim() : '') + '</title>\n\n' +
+            'The id came from the path, via\n' +
+            'router.ParamsFromContext(r.Context()).ByName("id"),\n' +
+            'not from r.URL.Query().Get("id").\n\n' +
+            (main ? main[1].trim() : ''));
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'wrongmethod') {
+        fetch(DEMO + '/clean/snippet/view/1', {
+          method: 'POST', cache: 'no-store', redirect: 'manual'
+        }).then(function (r) {
+          return r.text().then(function (body) { return [r, body]; });
+        }).then(function (pair) {
+          message(slot, pair[0].status, 'Method Not Allowed',
+            'POST /clean/snippet/view/1\n\n' +
+            'HTTP/1.1 ' + pair[0].status + ' ' + pair[0].statusText + '\n' +
+            'Allow: ' + (pair[0].headers.get('allow') || 'GET, OPTIONS') + '\n\n' +
+            pair[1].trim() + '\n\n' +
+            'The route only accepts GET, so httprouter answers 405 and\n' +
+            'lists what would work. The handler was never called.');
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'missing') {
+        fetch(DEMO + '/clean/missing', { cache: 'no-store' }).then(function (r) {
+          return r.text().then(function (body) { return [r, body]; });
+        }).then(function (pair) {
+          message(slot, pair[0].status, 'custom 404 handler',
+            'GET /clean/missing\n\n' +
+            'No pattern matches, so httprouter calls router.NotFound,\n' +
+            'which wraps app.notFound(). Before section 7.2 set that\n' +
+            'field this returned "404 page not found" while\n' +
+            '/clean/snippet/view/99 returned "Not Found".\n\n' +
+            'body: ' + pair[1].trim());
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'create') {
+        fetch(DEMO + '/clean/snippet/create', {
+          method: 'POST', cache: 'no-store', redirect: 'manual'
+        }).then(function (r) {
+          var location = r.headers.get('location');
+          return r.text().then(function () {
+            message(slot, r.status, 'See Other',
+              'POST /clean/snippet/create\n\n' +
+              'HTTP/1.1 ' + r.status + ' ' + r.statusText + '\n' +
+              'Location: ' + location + '\n\n' +
+              'snippetCreatePost() inserts and redirects with\n' +
+              'http.StatusSeeOther. Note the redirect uses the clean\n' +
+              'URL format: /snippet/view/' + (location || '').split('/').pop() +
+              ' instead of ?id=' + (location || '').split('/').pop() + '.\n\n' +
+              'There is no method check in the handler any more —\n' +
+              'httprouter dispatched GET here and POST to\n' +
+              'snippetCreatePost, from the same pattern.');
+          });
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+    });
+  });
+
   /* --------------------------------------------------------- live badges */
 
   function badge(id) {
@@ -526,6 +642,7 @@
   badge('ch4State');
   badge('ch5State');
   badge('ch6State');
+  badge('ch7State');
 
   /* ------------------------------------------------------- replica form */
 
