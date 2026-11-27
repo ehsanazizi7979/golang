@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build chapter-one.html — a single self-contained page covering
-chapters 1-5 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
+chapters 1-6 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
 
 Sources (all extracted from Let's Go [Alex Edwards].pdf in this directory)
 
@@ -13,6 +13,8 @@ Sources (all extracted from Let's Go [Alex Edwards].pdf in this directory)
                           (5 figures: go.sum, models dir, %+v dumps, 404)
   chapter 5   pp. 127-161 Dynamic HTML templates, sections 5.1 - 5.6
                           (9 figures: wireframes, rendered pages, humanDate)
+  chapter 6   pp. 162-179 Middleware, sections 6.1 - 6.5
+                          (1 figure: the Firefox CSP console)
   main.go     p.  14      used by the live demo
 
 Figures
@@ -64,6 +66,7 @@ IMAGES = {
     "ch5-07": ROOT / "assets" / "ch5" / "07-home-current-year.jpg",
     "ch5-08": ROOT / "assets" / "ch5" / "08-home-humandate.jpg",
     "ch5-09": ROOT / "assets" / "ch5" / "09-view-humandate.jpg",
+    "ch6-01": ROOT / "assets" / "ch6" / "01-csp-console.jpg",
 }
 
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
@@ -117,6 +120,12 @@ def verify_pages() -> None:
         149: "Catching runtime errors",
         153: "Common dynamic data",
         157: "Custom template functions",
+        162: "Middleware",
+        163: "How middleware works",
+        166: "Setting security headers",
+        171: "Request logging",
+        173: "Panic recovery",
+        178: "Composable middleware chains",
     }
     for pno, needle in checks.items():
         text = doc[pno - 1].get_text()
@@ -250,18 +259,19 @@ HERO = f"""
 <div class="hero">
   <div class="wrap">
     <p class="kicker">Let’s Go · Alex Edwards · 2nd edition, v2.20.0</p>
-    <h1>Chapters 1–5 — <span>Introduction</span><br>&amp; Foundations to Templates</h1>
+    <h1>Chapters 1–6 — <span>Introduction</span><br>&amp; Foundations to Middleware</h1>
     <p>Build Snippetbox: a web app for pasting and sharing snippets of text. Chapter one sets the destination and
        the toolchain; chapter two builds the whole foundations of the app — modules, routing, headers, query
        strings, project structure, templates and static files. Chapter three adds nothing visible and makes
        everything maintainable: flags, leveled logs, injected dependencies and centralised errors. Chapter four
        gives it a memory — a MySQL connection pool, a models package, and every shape of SQL call — and chapter
-       five gives it a face: templates, actions, a cache, and a render that fails safely.</p>
+       five gives it a face — templates, actions, a cache, and a render that fails safely — and chapter six wraps
+       the whole thing in middleware: security headers, request logging and panic recovery.</p>
     <div class="meta">
-      <span>156 pages of source (pp. 6–161)</span>
-      <span>29 figures, all embedded</span>
+      <span>173 pages of source (pp. 6–179)</span>
+      <span>30 figures, all embedded</span>
       <span>Live demo on port {DEMO_PORT}</span>
-      <span>Reading time ≈ 65 min</span>
+      <span>Reading time ≈ 75 min</span>
     </div>
   </div>
 </div>
@@ -330,6 +340,16 @@ TOC = """
       <li><a href="#ch5-demo">Chapter 5 live</a></li>
       <li><a href="#ch5-takeaways">Takeaways</a></li>
     </ol>
+    <p class="part">Chapter 6 · Middleware</p>
+    <ol>
+      <li><a href="#s61">6.1 How it works</a></li>
+      <li><a href="#s62">6.2 Security headers</a></li>
+      <li><a href="#s63">6.3 Request logging</a></li>
+      <li><a href="#s64">6.4 Panic recovery</a></li>
+      <li><a href="#s65">6.5 Composable chains</a></li>
+      <li><a href="#ch6-demo">Chapter 6 live</a></li>
+      <li><a href="#ch6-takeaways">Takeaways</a></li>
+    </ol>
   </nav>
 """
 
@@ -344,6 +364,7 @@ def build() -> str:
     ch3 = (ROOT / "content" / "chapter3.html").read_text(encoding="utf-8")
     ch4 = (ROOT / "content" / "chapter4.html").read_text(encoding="utf-8")
     ch5 = (ROOT / "content" / "chapter5.html").read_text(encoding="utf-8")
+    ch6 = (ROOT / "content" / "chapter6.html").read_text(encoding="utf-8")
 
     # chapter 1's hero/toc listed a "Where it goes next" section; keep its content
     # but retitle it so it reads as a bridge into chapter 2.
@@ -369,6 +390,8 @@ def build() -> str:
         + ch4.strip()
         + '\n<hr class="rule" id="chapter5">\n'
         + ch5.strip()
+        + '\n<hr class="rule" id="chapter6">\n'
+        + ch6.strip()
         + "\n</article></div>"
     )
 
@@ -377,7 +400,7 @@ def build() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Let&#39;s Go — chapters 1–5 summary</title>
+<title>Let&#39;s Go — chapters 1–6 summary</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -385,11 +408,11 @@ def build() -> str:
 {body}
 <footer>
   <div class="wrap">
-    Summary of chapters 1–5 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
+    Summary of chapters 1–6 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
     Alex Edwards (2nd edition, v2.20.0), generated from <code>Let’s Go [Alex Edwards].pdf</code> in this repository:
-    pages 6–10 for chapter 1, 11–61 for chapter 2, 62–85 for chapter 3, 86–126 for chapter 4 and 127–161 for
-    chapter 5. All 29 figures — chapter 3 has none — were extracted with PyMuPDF and inlined as base64, so this
-    file needs no network access.<br>
+    pages 6–10 for chapter 1, 11–61 for chapter 2, 62–85 for chapter 3, 86–126 for chapter 4, 127–161 for
+    chapter 5 and 162–179 for chapter 6. All 30 figures — chapter 3 has none — were extracted with PyMuPDF and
+    inlined as base64, so this file needs no network access.<br>
     Live demo: <code>web/snippetbox/</code> — the book’s own templates, static directory, flags and loggers, served by
     <code>web/server.js</code> on port {DEMO_PORT}. Rebuild this page with
     <code>python3 build_chapter1.py</code>.

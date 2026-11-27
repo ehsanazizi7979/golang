@@ -1,4 +1,4 @@
-/* Page script for chapter-one.html — the chapters 1-5 summary.
+/* Page script for chapter-one.html — the chapters 1-6 summary.
  *
  * Kept as a real .js file (rather than a Python string) so the escaping is
  * unambiguous; build_chapter1.py inlines it into the generated page. */
@@ -427,6 +427,86 @@
     });
   });
 
+  /* ------------------------------------------------------------ chapter 6 */
+
+  var CH6_SLOT = { trace: 'chain', headers: 'chain', panic: 'panic' };
+
+  document.querySelectorAll('[data-ch6]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key = btn.getAttribute('data-ch6');
+      var slot = document.querySelector('[data-ch6-slot="' + (CH6_SLOT[key] || 'chain') + '"]');
+      btn.disabled = true;
+      var done = function () { btn.disabled = false; };
+
+      if (key === 'trace') {
+        fetch(DEMO + '/api/mw/trace', { cache: 'no-store' }).then(function (r) {
+          return r.json();
+        }).then(function (d) {
+          var depth = { recoverPanic: 0, logRequest: 1, secureHeaders: 2, servemux: 3, 'application handler': 4 };
+          var lines = d.events.map(function (e) {
+            var pad = new Array((depth[e.mw] || 0) + 1).join('  ');
+            var arrow = (e.phase === 'down' || e.phase === 'in') ? '\u2193' : '\u2191';
+            return pad + arrow + ' ' + e.mw + ' (' + e.phase + ')';
+          });
+          lines.push('', 'order: ' + d.architecture, '');
+          Object.keys(d.headers).forEach(function (k) {
+            lines.push(k + ': ' + d.headers[k]);
+          });
+          message(slot, 200, 'chain executed', lines.join('\n'));
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'headers') {
+        // A real XHR through the chain, showing the headers that arrive.
+        fetch(DEMO + '/newsnippets', { cache: 'no-store' }).then(function (r) {
+          var head = [];
+          ['content-security-policy', 'referrer-policy', 'x-content-type-options',
+           'x-frame-options', 'x-xss-protection'].forEach(function (h) {
+            var v = r.headers.get(h);
+            if (v) head.push(h + ': ' + v);
+          });
+          return r.text().then(function (body) {
+            var title = /<title>([\s\S]*?)<\/title>/.exec(body);
+            message(slot, r.status, 'GET /newsnippets',
+              'status: ' + r.status + '\n\n' + head.join('\n') +
+              '\n\nbody begins with the cached templates:\n  ' +
+              (title ? '<title>' + title[1].trim() + '</title>' : '(no title)'));
+          });
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'panic') {
+        fetch(DEMO + '/api/mw/panic', { cache: 'no-store' }).then(function (r) {
+          return r.json();
+        }).then(function (d) {
+          var a = d.recovered, b = d.bare, lines = [];
+          lines.push('--- without recoverPanic() ---');
+          lines.push('  status:  ' + (b.status === 0 ? 'none' : b.status));
+          lines.push('  body:    ' + b.body);
+          lines.push('  events:  ' + (b.events.length
+            ? b.events.map(function (e) { return e.mw; }).join(' -> ')
+            : '(none — the panic took the whole chain with it)'));
+          lines.push('');
+          lines.push('--- with recoverPanic() ---');
+          lines.push('  status:  ' + a.status + ' ' + a.body);
+          lines.push('  Connection: ' + (a.connection || '(unset)'));
+          lines.push('  events:  ' + a.events.map(function (e) {
+            return e.mw + '(' + e.phase + ')';
+          }).join(' -> '));
+          lines.push('');
+          lines.push('  headers on the 500:');
+          Object.keys(a.headers).forEach(function (k) {
+            lines.push('    ' + k + ': ' + a.headers[k]);
+          });
+          message(slot, 500, 'panic: oops! something went wrong', lines.join('\n'));
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+    });
+  });
+
   /* --------------------------------------------------------- live badges */
 
   function badge(id) {
@@ -445,6 +525,7 @@
   badge('ch3State');
   badge('ch4State');
   badge('ch5State');
+  badge('ch6State');
 
   /* ------------------------------------------------------- replica form */
 

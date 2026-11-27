@@ -1,26 +1,28 @@
-# golang — Go books + a chapters 1–5 study page
+# golang — Go books + a chapters 1–6 study page
 
-Reference PDFs for Go, plus a self-contained HTML summary of **chapters 1–5 of _Let's Go_**
+Reference PDFs for Go, plus a self-contained HTML summary of **chapters 1–6 of _Let's Go_**
 (Alex Edwards, 2nd ed.) and a live Snippetbox demo server.
 
 ## What's here
 
 | Path | What it is |
 | --- | --- |
-| `chapter-one.html` | The deliverable: chapters 1–5 summary, with all 29 figures and the code samples **embedded** (open it directly, no server needed) |
+| `chapter-one.html` | The deliverable: chapters 1–6 summary, with all 30 figures and the code samples **embedded** (open it directly, no server needed) |
 | `content/chapter1.html` | Chapter 1 text fragment (Introduction, Prerequisites) |
 | `content/chapter2.html` | Chapter 2 text fragment (Foundations, sections 2.1–2.9) |
 | `content/chapter3.html` | Chapter 3 text fragment (Configuration and error handling, 3.1–3.5 — no figures) |
 | `content/chapter4.html` | Chapter 4 text fragment (Database-driven responses, 4.1–4.9) |
 | `content/chapter5.html` | Chapter 5 text fragment (Dynamic HTML templates, 5.1–5.6) |
+| `content/chapter6.html` | Chapter 6 text fragment (Middleware, 6.1–6.5) |
 | `content/page.js` | The summary page's script (demo buttons for every chapter, live badges, Go highlighting) |
 | `build_chapter1.py` | Rebuilds `chapter-one.html` from the PDF and the chapter fragments |
 | `web/server.js` | Dependency-free Node server: the book's routes live, plus the pages below |
-| `web/snippetbox/` | The book's actual project tree: `ui/html/*.tmpl`, `ui/static/{css,img,js}`, plus `app.js` (flags, leveled loggers, app struct), `chapter3.js` (config/logging demo pages), `models.js` (an in-memory `snippets` table with the chapter's `SnippetModel`), `chapter4.js` (the SQL playground), `template.js` (a working `html/template`) and `chapter5.js` (the template demo pages) |
+| `web/snippetbox/` | The book's actual project tree: `ui/html/*.tmpl`, `ui/static/{css,img,js}`, plus `app.js` (flags, leveled loggers, app struct), `chapter3.js` (config/logging demo pages), `models.js` (an in-memory `snippets` table with the chapter's `SnippetModel`), `chapter4.js` (the SQL playground), `template.js` (a working `html/template`), `chapter5.js` (the template demo pages), `middleware.js` (the chapter-6 chain, real and traced) and `chapter6.js` |
 | `assets/` | The chapter-1 figures (`snippetbox-app.png`, `book-cover.png`) |
 | `assets/ch2/` | The 14 chapter-2 figures, cropped from pp. 13–56 at 150 dpi |
 | `assets/ch4/` | The 5 chapter-4 figures, cropped from pp. 92–120 at 150 dpi |
 | `assets/ch5/` | The 9 chapter-5 figures, cropped from pp. 128–160 at 150 dpi |
+| `assets/ch6/` | The chapter-6 figure (Firefox CSP console), p. 170 |
 
 ## Run the live demo
 
@@ -30,7 +32,7 @@ node web/server.js          # http://localhost:3000/console
 
 | URL | |
 | --- | --- |
-| `/summary` | The chapters 1–5 HTML summary (`chapter-one.html`) |
+| `/summary` | The chapters 1–6 HTML summary (`chapter-one.html`) |
 | `/logs` | Live `INFO`/`ERROR` stream from the custom loggers (chapter 3.2) |
 | `/config` | The command-line flags this server parsed (chapter 3.1) |
 | `/break` | Toggle the deliberate missing-template error (chapters 3.3/3.4) |
@@ -53,6 +55,9 @@ node web/server.js          # http://localhost:3000/console
 | `/tplx` | Template playground: edit a template, run it (chapter 5.2) |
 | `/tplx/escape` | `html/template` vs `text/template` escaping (chapter 5.1) |
 | `/tplx/error` | The two-stage render and the `len nil` runtime error (chapter 5.4) |
+| `/middleware` | The chain executed link by link, with the five security headers (chapter 6) |
+| `/middleware/panic` | Panic recovery: empty reply vs. a proper 500 (chapter 6.4) |
+| `/middleware/alice` | `alice.New(...).Then(mux)` and named chains (chapter 6.5) |
 
 ### Command-line flags
 
@@ -79,5 +84,5 @@ to run if an image placeholder is unresolved or unused.
 Prerequisites), chapter 2 on pp. 11–61 (Foundations, 2.1–2.9), chapter 3 on pp. 62–85
 (Configuration and error handling, 3.1–3.5; this chapter contains no figures) and chapter 4
 on pp. 86–126 (Database-driven responses, 4.1–4.9) and chapter 5 on pp. 127–161 (Dynamic HTML
-templates, 5.1–5.6). The summary
+templates, 5.1–5.6) and chapter 6 on pp. 162–179 (Middleware, 6.1–6.5). The summary
 paraphrases the text; the figures and code samples are embedded for study.

@@ -23,6 +23,7 @@ const { parseConfig, Application } = require('./snippetbox/app');
 const chapter3 = require('./snippetbox/chapter3');
 const chapter4 = require('./snippetbox/chapter4');
 const chapter5 = require('./snippetbox/chapter5');
+const chapter6 = require('./snippetbox/chapter6');
 const models = require('./snippetbox/models');
 
 // Chapter 3.1: configuration comes from command-line flags, parsed before
@@ -182,6 +183,7 @@ function layout(opts) {
   <li><a href="/home" ${active === '/home' ? 'class=on' : ''}>Templated home</a></li>
   ${link('/db', 'Database')}
   ${link('/newsnippets', 'Templates')}
+  ${link('/middleware', 'Middleware')}
   ${link('/logs', 'Logs')}
   <li class="right"><a href="/" target="_blank" rel="noopener">GET / <span class="muted">raw</span></a></li>
 </ul></nav>
@@ -397,8 +399,22 @@ function handler(req, res) {
   if (chapter3.handle(req, res, url, app, config)) return;
   // Chapter 4.7/4.8 own /snippet/view and /snippets, so they dispatch first.
   if (chapter4.handle(req, res, url, db, app)) return;
-  // Chapter 5: the dynamic HTML templates, rendered from ui/html/*.tmpl.
+  // Chapter 5. The template pages are wrapped by chapter 6's middleware, so the
+  // five security headers and the logRequest() line apply to them as well.
+  if (url.pathname === '/newsnippets' || url.pathname === '/newsnippets/view') {
+    const inner = (rq, rs) => chapter5.handle(rq, rs, url, app, db) || false;
+    const muxLike = (rq, rs) => {
+      const handled = inner(rq, rs);
+      if (!handled) rs.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return handled;
+    };
+    const chain = chapter6.standardChain(app, muxLike);
+    chain(req, res);
+    return;
+  }
   if (chapter5.handle(req, res, url, app, db)) return;
+  // Chapter 6: the chain, panic recovery and alice.
+  if (chapter6.handle(req, res, url, app)) return;
   if (chapter2.handle(req, res, url, config, app)) return;
 
   // 1. The home route.
