@@ -1,0 +1,730 @@
+<h2 class="sec" id="ch8" style="margin-top:0">Chapter 8 — Processing forms</h2>
+<h3>“Post-Redirect-Get, and a form that argues back”</h3>
+<p class="lead">Chapter 7 gave the application a <code>GET</code> and a <code>POST</code> on the same pattern. This
+  chapter fills them in: a real HTML form, untrusted input parsed out of the request body, validation rules that
+  produce per-field error messages, and a redirect at the end so a refresh can't submit twice.</p>
+
+<p>Everything here follows one workflow — <b>Post-Redirect-Get</b>:</p>
+
+<ol class="steps">
+  <li>The user makes a <code>GET /snippet/create</code> and is shown the blank form.</li>
+  <li>The user fills it in; the browser sends the data as <code>POST /snippet/create</code>.</li>
+  <li><code>snippetCreatePost</code> validates. On failure the form is re-displayed with the offending fields
+      highlighted and the submitted values still in place. On success the snippet is inserted and the user is
+      redirected to <code>/snippet/view/:id</code>.</li>
+</ol>
+
+<figure class="shot">
+  <img src="{{IMG:ch8-01}}" alt="The create page as a wireframe: a Title field, a Content textarea, three Delete in radio buttons and a green Publish snippet button.">
+  <figcaption><b>Figure 8.1</b> — the target: <code>GET /snippet/create</code>, three fields and a button.</figcaption>
+</figure>
+
+<p>By the end of the chapter the handler has been rewritten four times — <code>ParseForm</code> and
+  <code>strconv.Atoi</code>, then hand-rolled validation, then an <code>internal/validator</code> package, then
+  automatic decoding with <code>go-playground/form</code>. Each rewrite removes code without changing what the
+  user sees. The demo runs the final version, and lets you step back through the earlier ones.</p>
+
+<h2 class="sec" id="s81">8.1 · Setting up the HTML form</h2>
+<p>A new page template, using the same <code>define</code>/<code>main</code> pattern as every other page:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/create.tmpl</span><span class="lang">tmpl</span></div>
+  <pre class="code">{{define "title"}}Create a New Snippet{{end}}
+
+{{define "main"}}
+&lt;form action='/snippet/create' method='POST'&gt;
+    &lt;div&gt;
+        &lt;label&gt;Title:&lt;/label&gt;
+        &lt;input type='text' name='title'&gt;
+    &lt;/div&gt;
+    &lt;div&gt;
+        &lt;label&gt;Content:&lt;/label&gt;
+        &lt;textarea name='content'&gt;&lt;/textarea&gt;
+    &lt;/div&gt;
+    &lt;div&gt;
+        &lt;label&gt;Delete in:&lt;/label&gt;
+        &lt;input type='radio' name='expires' value='365' checked&gt; One Year
+        &lt;input type='radio' name='expires' value='7'&gt; One Week
+        &lt;input type='radio' name='expires' value='1'&gt; One Day
+    &lt;/div&gt;
+    &lt;div&gt;
+        &lt;input type='submit' value='Publish snippet'&gt;
+    &lt;/div&gt;
+&lt;/form&gt;
+{{end}}</pre>
+</div>
+
+<p>The form sends three values — <code>title</code>, <code>content</code> and <code>expires</code>, the number of
+  days until the snippet should expire. The only thing worth pointing at is the <code>action</code> and
+  <code>method</code> pair: the data is POSTed to <code>/snippet/create</code>, the same URL that showed the
+  form.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/partials/nav.tmpl</span><span class="lang">tmpl</span></div>
+  <pre class="code">{{define "nav"}}
+    &lt;nav&gt;
+        &lt;a href='/'&gt;Home&lt;/a&gt;
+        <span class="com">&lt;!-- Add a link to the new form --&gt;</span>
+        &lt;a href='/snippet/create'&gt;Create snippet&lt;/a&gt;
+    &lt;/nav&gt;
+{{end}}</pre>
+</div>
+
+<p>And <code>snippetCreate</code> renders it. Chapter 7 already routed <code>GET</code> here; the handler simply had
+  nothing to do:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (app *application) snippetCreate(w http.ResponseWriter, r *http.Request) {
+    data := app.newTemplateData(r)
+    app.render(w, http.StatusOK, <span class="str">"create.tmpl"</span>, data)
+}</pre>
+</div>
+
+<figure class="shot">
+  <img src="{{IMG:ch8-02}}" alt="The create page in a browser at localhost:4000/snippet/create: Snippetbox header, Home and Create snippet navigation, Title text input, Content textarea and three radio buttons with One Year selected.">
+  <figcaption><b>Figure 8.2</b> — the form in place, with <code>One Year</code> selected from the markup.</figcaption>
+</figure>
+
+<h2 class="sec" id="s82">8.2 · Parsing form data</h2>
+<p>Chapter 7's <code>POST /snippet/create</code> already lands in <code>snippetCreatePost</code>. Processing the body
+  is two steps: parse it into the request, then read the values out.</p>
+
+<p><code>r.ParseForm()</code> checks the body is well-formed and stores the data in <code>r.PostForm</code>. It
+  returns an error for a missing or oversized body — which is a client error, so 400. It is also
+  <em>idempotent</em>: calling it twice on the same request is harmless, which matters once helpers start calling
+  it too.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — first version</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (app *application) snippetCreatePost(w http.ResponseWriter, r *http.Request) {
+    <span class="com">// First we call r.ParseForm() which adds any data in POST request bodies</span>
+    <span class="com">// to the r.PostForm map. This also works in the same way for PUT and PATCH</span>
+    <span class="com">// requests. If there are any errors, we use our app.ClientError() helper to</span>
+    <span class="com">// send a 400 Bad Request response to the user.</span>
+    err := r.ParseForm()
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        app.clientError(w, http.StatusBadRequest)
+        <span class="kw">return</span>
+    }
+
+    <span class="com">// Use the r.PostForm.Get() method to retrieve the title and content</span>
+    <span class="com">// from the r.PostForm map.</span>
+    title := r.PostForm.Get(<span class="str">"title"</span>)
+    content := r.PostForm.Get(<span class="str">"content"</span>)
+
+    <span class="com">// The r.PostForm.Get() method always returns the form data as a *string*.</span>
+    <span class="com">// However, we're expecting our expires value to be a number, and want to</span>
+    <span class="com">// represent it in our Go code as an integer. So we need to manually covert</span>
+    <span class="com">// the form data to an integer using strconv.Atoi(), and we send a 400 Bad</span>
+    <span class="com">// Request response if the conversion fails.</span>
+    expires, err := strconv.Atoi(r.PostForm.Get(<span class="str">"expires"</span>))
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        app.clientError(w, http.StatusBadRequest)
+        <span class="kw">return</span>
+    }
+
+    id, err := app.snippets.Insert(title, content, expires)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        app.serverError(w, err)
+        <span class="kw">return</span>
+    }
+
+    http.Redirect(w, r, fmt.Sprintf(<span class="str">"/snippet/view/%d"</span>, id), http.StatusSeeOther)
+}</pre>
+</div>
+
+<p>Every form value arrives as a <code>string</code>, so anything numeric needs converting by hand — and
+  <code>Atoi</code> failing is the client's fault, not the server's, hence another 400. A form field with no matching
+  name in the request simply returns <code>""</code>, exactly like a missing query-string parameter.</p>
+
+<figure class="shot">
+  <img src="{{IMG:ch8-03}}" alt="The create form filled in: title One Week, content a haiku beginning From time to time, and the One Week radio selected.">
+  <figcaption><b>Figure 8.3</b> — filled in and ready to submit.</figcaption>
+</figure>
+
+<figure class="shot">
+  <img src="{{IMG:ch8-04}}" alt="The snippet view page after submitting, showing the haiku with its created and expires dates and id #5.">
+  <figcaption><b>Figure 8.4</b> — the 303 lands on the new snippet's page. Note the clean URL that chapter 7
+    introduced; the old <code>?id=5</code> form is gone.</figcaption>
+</figure>
+
+<h4>The <code>r.Form</code> map</h4>
+<p><code>r.Form</code> is the subtly different sibling. <code>r.PostForm</code> is populated only for
+  <code>POST</code>, <code>PATCH</code> and <code>PUT</code>, and holds the request body only. <code>r.Form</code> is
+  populated for every method, and holds the body <em>and</em> the query string — so a form posted to
+  <code>/snippet/create?foo=bar</code> would also answer <code>r.Form.Get("foo")</code>. On a conflict the body value
+  wins.</p>
+<p>That is useful when an application accepts data from either place. Here it isn't: the data belongs in the body, so
+  <code>r.PostForm</code> is the honest choice.</p>
+
+<h4>Why not <code>FormValue</code>?</h4>
+<p><code>r.FormValue()</code> and <code>r.PostFormValue()</code> are shortcuts that call <code>ParseForm()</code> for
+  you and then fetch the field. The book recommends avoiding them, for one reason: they silently discard the error
+  from <code>ParseForm()</code>. Your application can be failing for real users with no way to report it.</p>
+
+<h4>Multiple-value fields</h4>
+<p><code>Get()</code> returns only the <em>first</em> value, so it is useless for a group of checkboxes. The
+  underlying type of <code>r.PostForm</code> is <code>url.Values</code>, whose underlying type is
+  <code>map[string][]string</code> — so index the map directly:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Reading every value of a multi-value field</span><span class="lang">go</span></div>
+  <pre class="code">&lt;input type=<span class="str">"checkbox"</span> name=<span class="str">"items"</span> value=<span class="str">"foo"</span>&gt; Foo
+&lt;input type=<span class="str">"checkbox"</span> name=<span class="str">"items"</span> value=<span class="str">"bar"</span>&gt; Bar
+&lt;input type=<span class="str">"checkbox"</span> name=<span class="str">"items"</span> value=<span class="str">"baz"</span>&gt; Baz
+
+<span class="kw">for</span> i, item := <span class="kw">range</span> r.PostForm[<span class="str">"items"</span>] {
+    fmt.Fprintf(w, <span class="str">"%d: Item %s\n"</span>, i, item)
+}</pre>
+</div>
+
+<h4>Limiting form size</h4>
+<p>Non-multipart <code>POST</code>, <code>PUT</code> and <code>PATCH</code> bodies are capped at 10MB by default; go
+  past it and <code>ParseForm()</code> returns an error. To lower the limit:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Lowering the limit to 4KB</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Limit the request body size to 4096 bytes</span>
+r.Body = http.MaxBytesReader(w, r.Body, 4096)
+err := r.ParseForm()
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    http.Error(w, <span class="str">"Bad Request"</span>, http.StatusBadRequest)
+    <span class="kw">return</span>
+}</pre>
+</div>
+
+<p>Now only the first 4096 bytes are read, and a read beyond that makes <code>MaxBytesReader</code> return an error
+  which <code>ParseForm()</code> surfaces. It also sets a flag on the <code>http.ResponseWriter</code> that tells the
+  server to close the underlying TCP connection — so a client that keeps pushing bytes can't occupy a connection
+  indefinitely.</p>
+
+<h2 class="sec" id="s83">8.3 · Validating form data</h2>
+<p>At this point the handler trusts the user completely. It shouldn't. For this form:</p>
+<ul>
+  <li><code>title</code> and <code>content</code> must not be blank;</li>
+  <li><code>title</code> must be no more than 100 characters;</li>
+  <li><code>expires</code> must be exactly one of <code>1</code>, <code>7</code> or <code>365</code>.</li>
+</ul>
+<p>All three are a few <code>if</code> statements plus <code>strings</code> and <code>unicode/utf8</code>:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — validation bolted on</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Initialize a map to hold any validation errors for the form fields.</span>
+fieldErrors := make(map[string]string)
+
+<span class="com">// Check that the title value is not blank and is not more than 100</span>
+<span class="com">// characters long. If it fails either of those checks, add a message to the</span>
+<span class="com">// errors map using the field name as the key.</span>
+<span class="kw">if</span> strings.TrimSpace(title) == <span class="str">""</span> {
+    fieldErrors[<span class="str">"title"</span>] = <span class="str">"This field cannot be blank"</span>
+} <span class="kw">else if</span> utf8.RuneCountInString(title) &gt; 100 {
+    fieldErrors[<span class="str">"title"</span>] = <span class="str">"This field cannot be more than 100 characters long"</span>
+}
+
+<span class="com">// Check that the Content value isn't blank.</span>
+<span class="kw">if</span> strings.TrimSpace(content) == <span class="str">""</span> {
+    fieldErrors[<span class="str">"content"</span>] = <span class="str">"This field cannot be blank"</span>
+}
+
+<span class="com">// Check the expires value matches one of the permitted values (1, 7 or</span>
+<span class="com">// 365).</span>
+<span class="kw">if</span> expires != 1 &amp;&amp; expires != 7 &amp;&amp; expires != 365 {
+    fieldErrors[<span class="str">"expires"</span>] = <span class="str">"This field must equal 1, 7 or 365"</span>
+}
+
+<span class="com">// If there are any errors, dump them in a plain text HTTP response and</span>
+<span class="com">// return from the handler.</span>
+<span class="kw">if</span> len(fieldErrors) &gt; 0 {
+    fmt.Fprint(w, fieldErrors)
+    <span class="kw">return</span>
+}</pre>
+</div>
+
+<div class="note"><b>Runes, not bytes.</b> The length check uses <code>utf8.RuneCountInString()</code>, not
+  <code>len()</code>. <code>len()</code> counts bytes, and <code>"Zoë"</code> is 3 characters but 4 bytes because of
+  the umlauted <code>ë</code>. A 100-<em>byte</em> limit would reject perfectly reasonable 60-character titles full of
+  accented letters, emoji or CJK text.</p>
+  <p>Also note the <code>else if</code>: if the title is blank, the user gets the blank message, not both messages.
+  That behaviour comes free from the structure here, and has to be reproduced deliberately by the helper version
+  later.</p></div>
+
+<figure class="shot">
+  <img src="{{IMG:ch8-05}}" alt="The create form with a very long title and an empty Content textarea.">
+  <figcaption><b>Figure 8.5</b> — a title far past 100 characters, and blank content.</figcaption>
+</figure>
+
+<p>Submitting that yields a plain-text dump of the map — diagnostic, but not something to show a user:</p>
+
+<figure class="shot">
+  <img src="{{IMG:ch8-06}}" alt="A browser window showing the raw map dump: map[content:This field cannot be blank title:This field cannot be more than 100 characters long].">
+  <figcaption><b>Figure 8.6</b> — <code>fmt.Fprint(w, fieldErrors)</code>. Correct, and useless to a human.</figcaption>
+</figure>
+
+<h2 class="sec" id="s84">8.4 · Displaying errors and repopulating fields</h2>
+<p>The next step is to hand those errors back to the template. First, a place to put them — the template data gains
+  a <code>Form</code> field:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/templates.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Add a Form field with the type "any".</span>
+<span class="kw">type</span> templateData <span class="kw">struct</span> {
+    CurrentYear <span class="kw">int</span>
+    Snippet     *models.Snippet
+    Snippets    []*models.Snippet
+    Form        <span class="kw">any</span>
+}</pre>
+</div>
+
+<p><code>any</code>, because different forms will put different structs in it. Next, a struct that holds both the
+  submitted values and the errors. Every field is exported — <code>html/template</code> can only read exported
+  fields:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Define a snippetCreateForm struct to represent the form data and validation</span>
+<span class="com">// errors for the form fields. Note that all the struct fields are deliberately</span>
+<span class="com">// exported (i.e. start with a capital letter). This is because struct fields</span>
+<span class="com">// must be exported in order to be read by the html/template package when</span>
+<span class="com">// rendering the template.</span>
+<span class="kw">type</span> snippetCreateForm <span class="kw">struct</span> {
+    Title       <span class="kw">string</span>
+    Content     <span class="kw">string</span>
+    Expires     <span class="kw">int</span>
+    FieldErrors map[<span class="kw">string</span>]<span class="kw">string</span>
+}</pre>
+</div>
+
+<p>The handler then builds one of those instead of loose variables, and re-renders the template on failure —
+  with <b>422 Unprocessable Entity</b>:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go</span><span class="lang">go</span></div>
+  <pre class="code">form := snippetCreateForm{
+    Title:       r.PostForm.Get(<span class="str">"title"</span>),
+    Content:     r.PostForm.Get(<span class="str">"content"</span>),
+    Expires:     expires,
+    FieldErrors: map[<span class="kw">string</span>]<span class="kw">string</span>{},
+}
+
+<span class="com">// ...the same four checks, operating on form.Title and friends...</span>
+
+<span class="com">// If there are any validation errors re-display the create.tmpl template,</span>
+<span class="com">// passing in the snippetCreateForm instance as dynamic data in the Form</span>
+<span class="com">// field. Note that we use the HTTP status code 422 Unprocessable Entity</span>
+<span class="com">// when sending the response to indicate that there was a validation error.</span>
+<span class="kw">if</span> len(form.FieldErrors) &gt; 0 {
+    data := app.newTemplateData(r)
+    data.Form = form
+    app.render(w, http.StatusUnprocessableEntity, <span class="str">"create.tmpl"</span>, data)
+    <span class="kw">return</span>
+}</pre>
+</div>
+
+<div class="note"><b>Why 422 and not 400?</b> The request was fine — it parsed, it decoded, the values were the right
+  types. It is the <em>content</em> the server can't accept, and 422 says precisely that. A 400 is for a body that
+  won't parse or a value that won't convert.</div>
+
+<h4>The template</h4>
+<p>Re-populating is just printing the struct's fields. The errors need one new idea: <code>FieldErrors</code> is a
+  <code>map[string]string</code> keyed by form-field name, and template field chains work on map keys as well as
+  struct fields — so <code>{{.Form.FieldErrors.title}}</code> looks up the key <code>"title"</code>.</p>
+
+<div class="note"><b>Map keys need no capitals.</b> Unlike struct fields, which must be exported to be readable from a
+  template, map keys are just strings and can be lowercase.</div>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: ui/html/pages/create.tmpl</span><span class="lang">tmpl</span></div>
+  <pre class="code">{{define "title"}}Create a New Snippet{{end}}
+
+{{define "main"}}
+&lt;form action='/snippet/create' method='POST'&gt;
+    &lt;div&gt;
+        &lt;label&gt;Title:&lt;/label&gt;
+        <span class="com">&lt;!-- Use the `with` action to render the value of .Form.FieldErrors.title
+        if it is not empty. --&gt;</span>
+        {{with .Form.FieldErrors.title}}
+            &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+        {{end}}
+        <span class="com">&lt;!-- Re-populate the title data by setting the `value` attribute. --&gt;</span>
+        &lt;input type='text' name='title' value='{{.Form.Title}}'&gt;
+    &lt;/div&gt;
+    &lt;div&gt;
+        &lt;label&gt;Content:&lt;/label&gt;
+        {{with .Form.FieldErrors.content}}
+            &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+        {{end}}
+        <span class="com">&lt;!-- Re-populate the content data as the inner HTML of the textarea. --&gt;</span>
+        &lt;textarea name='content'&gt;{{.Form.Content}}&lt;/textarea&gt;
+    &lt;/div&gt;
+    &lt;div&gt;
+        &lt;label&gt;Delete in:&lt;/label&gt;
+        {{with .Form.FieldErrors.expires}}
+            &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+        {{end}}
+        <span class="com">&lt;!-- Here we use the `if` action to check if the value of the re-populated
+        expires field equals 365. If it does, then we render the `checked`
+        attribute so that the radio input is re-selected. --&gt;</span>
+        &lt;input type='radio' name='expires' value='365' {{if (eq .Form.Expires 365)}}checked{{end}}&gt; One Year
+        <span class="com">&lt;!-- And we do the same for the other possible values too... --&gt;</span>
+        &lt;input type='radio' name='expires' value='7' {{if (eq .Form.Expires 7)}}checked{{end}}&gt; One Week
+        &lt;input type='radio' name='expires' value='1' {{if (eq .Form.Expires 1)}}checked{{end}}&gt; One Day
+    &lt;/div&gt;
+    &lt;div&gt;
+        &lt;input type='submit' value='Publish snippet'&gt;
+    &lt;/div&gt;
+&lt;/form&gt;
+{{end}}</pre>
+</div>
+
+<div class="note"><b>The 500 you get for free.</b> Run the application now and <code>GET /snippet/create</code>
+  returns 500. <code>snippetCreate</code> never sets <code>data.Form</code>, so it is a nil <code>any</code>, and
+  <code>{{with .Form.FieldErrors.title}}</code> tries to walk into nil. The fix is the same field that makes the
+  feature possible — initialise a form in the <code>GET</code> handler, and use the opportunity to set a
+  <em>default</em>:</p>
+  <div class="codeblock" style="margin:14px 0 0">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go</span><span class="lang">go</span></div>
+    <pre class="code"><span class="kw">func</span> (app *application) snippetCreate(w http.ResponseWriter, r *http.Request) {
+    data := app.newTemplateData(r)
+    <span class="com">// Initialize a new createSnippetForm instance and pass it to the template.</span>
+    <span class="com">// Notice how this is also a great opportunity to set any default or</span>
+    <span class="com">// 'initial' values for the form --- here we set the initial value for the</span>
+    <span class="com">// snippet expiry to 365 days.</span>
+    data.Form = snippetCreateForm{
+        Expires: 365,
+    }
+    app.render(w, http.StatusOK, <span class="str">"create.tmpl"</span>, data)
+}</pre>
+  </div></div>
+
+<figure class="shot">
+  <img src="{{IMG:ch8-07}}" alt="The create form with Content filled in, One Year selected and the Title field left blank.">
+  <figcaption><b>Figure 8.7</b> — content and expiry set, title left blank on purpose.</figcaption>
+</figure>
+
+<figure class="shot">
+  <img src="{{IMG:ch8-08}}" alt="The form re-displayed after submission: the title field has a red border and the error This field cannot be blank, the content is still there and One Week is still selected.">
+  <figcaption><b>Figure 8.8</b> — 422, the error message beside the field, and everything the user typed still
+    in place. Note that <b>One Week</b> stayed selected, not the default.</figcaption>
+</figure>
+
+<h2 class="sec" id="s85">8.5 · Creating validation helpers</h2>
+<p>That works, but it is a lot of boilerplate for three fields, and a real application has many forms. The book
+  extracts a small <code>internal/validator</code> package. It changes nothing for the user — this is a refactor.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: internal/validator/validator.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">package</span> validator
+
+<span class="kw">import</span> (
+    <span class="str">"strings"</span>
+    <span class="str">"unicode/utf8"</span>
+)
+
+<span class="com">// Define a new Validator type which contains a map of validation errors for our</span>
+<span class="com">// form fields.</span>
+<span class="kw">type</span> Validator <span class="kw">struct</span> {
+    FieldErrors map[<span class="kw">string</span>]<span class="kw">string</span>
+}
+
+<span class="com">// Valid() returns true if the FieldErrors map doesn't contain any entries.</span>
+<span class="kw">func</span> (v *Validator) Valid() <span class="kw">bool</span> {
+    <span class="kw">return</span> len(v.FieldErrors) == 0
+}
+
+<span class="com">// AddFieldError() adds an error message to the FieldErrors map (so long as no</span>
+<span class="com">// entry already exists for the given key).</span>
+<span class="kw">func</span> (v *Validator) AddFieldError(key, message <span class="kw">string</span>) {
+    <span class="com">// Note: We need to initialize the map first, if it isn't already</span>
+    <span class="com">// initialized.</span>
+    <span class="kw">if</span> v.FieldErrors == <span class="kw">nil</span> {
+        v.FieldErrors = make(map[<span class="kw">string</span>]<span class="kw">string</span>)
+    }
+
+    <span class="kw">if</span> _, exists := v.FieldErrors[key]; !exists {
+        v.FieldErrors[key] = message
+    }
+}
+
+<span class="com">// CheckField() adds an error message to the FieldErrors map only if a</span>
+<span class="com">// validation check is not 'ok'.</span>
+<span class="kw">func</span> (v *Validator) CheckField(ok <span class="kw">bool</span>, key, message <span class="kw">string</span>) {
+    <span class="kw">if</span> !ok {
+        v.AddFieldError(key, message)
+    }
+}
+
+<span class="com">// NotBlank() returns true if a value is not an empty string.</span>
+<span class="kw">func</span> NotBlank(value <span class="kw">string</span>) <span class="kw">bool</span> {
+    <span class="kw">return</span> strings.TrimSpace(value) != <span class="str">""</span>
+}
+
+<span class="com">// MaxChars() returns true if a value contains no more than n characters.</span>
+<span class="kw">func</span> MaxChars(value <span class="kw">string</span>, n <span class="kw">int</span>) <span class="kw">bool</span> {
+    <span class="kw">return</span> utf8.RuneCountInString(value) &lt;= n
+}
+
+<span class="com">// PermittedInt() returns true if a value is in a list of permitted integers.</span>
+<span class="kw">func</span> PermittedInt(value <span class="kw">int</span>, permittedValues ...<span class="kw">int</span>) <span class="kw">bool</span> {
+    <span class="kw">for</span> i := <span class="kw">range</span> permittedValues {
+        <span class="kw">if</span> value == permittedValues[i] {
+            <span class="kw">return</span> <span class="kw">true</span>
+        }
+    }
+    <span class="kw">return</span> <span class="kw">false</span>
+}</pre>
+</div>
+
+<p>Two behaviours are worth naming. <code>AddFieldError</code> refuses to overwrite an existing message, so a field can
+  carry at most one error and the <em>first</em> rule to fail is the one the user sees — which reproduces the
+  <code>else if</code> from section 8.3 without the branching. And <code>CheckField</code> takes the check as a
+  boolean rather than the value, so the rules read as sentences:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — the form embeds the Validator</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Remove the explicit FieldErrors struct field and instead embed the Validator</span>
+<span class="com">// type. Embedding this means that our snippetCreateForm "inherits" all the</span>
+<span class="com">// fields and methods of our Validator type (including the FieldErrors field).</span>
+<span class="kw">type</span> snippetCreateForm <span class="kw">struct</span> {
+    Title               <span class="kw">string</span>
+    Content             <span class="kw">string</span>
+    Expires             <span class="kw">int</span>
+    validator.Validator
+}
+
+<span class="com">// Because the Validator type is embedded by the snippetCreateForm struct,</span>
+<span class="com">// we can call CheckField() directly on it to execute our validation checks.</span>
+form.CheckField(validator.NotBlank(form.Title), <span class="str">"title"</span>, <span class="str">"This field cannot be blank"</span>)
+form.CheckField(validator.MaxChars(form.Title, 100), <span class="str">"title"</span>, <span class="str">"This field cannot be more than 100 characters long"</span>)
+form.CheckField(validator.NotBlank(form.Content), <span class="str">"content"</span>, <span class="str">"This field cannot be blank"</span>)
+form.CheckField(validator.PermittedInt(form.Expires, 1, 7, 365), <span class="str">"expires"</span>, <span class="str">"This field must equal 1, 7 or 365"</span>)
+
+<span class="kw">if</span> !form.Valid() {
+    data := app.newTemplateData(r)
+    data.Form = form
+    app.render(w, http.StatusUnprocessableEntity, <span class="str">"create.tmpl"</span>, data)
+    <span class="kw">return</span>
+}</pre>
+</div>
+
+<p>Embedding is doing real work here. <code>snippetCreateForm</code> gains <code>FieldErrors</code> as a field and
+  <code>CheckField</code>, <code>AddFieldError</code> and <code>Valid</code> as methods, so the template still reads
+  <code>.Form.FieldErrors.title</code> and the handler still calls <code>form.Valid()</code> — and any future form can
+  embed the same <code>Validator</code> and get the same API.</p>
+
+<h2 class="sec" id="s86">8.6 · Automatic form parsing</h2>
+<p>One more simplification, using a third-party decoder. It is entirely optional; it earns its place when an
+  application has many forms, or one very large one.</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Terminal</span><span class="lang">shell</span></div>
+  <pre class="term"><span class="prompt">$ go get github.com/go-playground/form/v4@v4</span>
+<span class="out">go get: added github.com/go-playground/form/v4 v4.2.0</span></pre>
+</div>
+
+<p>One decoder for the whole application, created in <code>main()</code> and injected like every other dependency:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/main.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Add a formDecoder field to hold a pointer to a form.Decoder instance.</span>
+<span class="kw">type</span> application <span class="kw">struct</span> {
+    errorLog      *log.Logger
+    infoLog       *log.Logger
+    snippets      *models.SnippetModel
+    templateCache map[<span class="kw">string</span>]*template.Template
+    formDecoder   *form.Decoder
+}
+
+<span class="com">// Initialize a decoder instance...</span>
+formDecoder := form.NewDecoder()
+
+<span class="com">// And add it to the application dependencies.</span>
+app := &amp;application{
+    errorLog:      errorLog,
+    infoLog:       infoLog,
+    snippets:      &amp;models.SnippetModel{DB: db},
+    templateCache: templateCache,
+    formDecoder:   formDecoder,
+}</pre>
+</div>
+
+<p>Struct tags map form names to fields, and <code>form:"-"</code> keeps the embedded <code>Validator</code> out of the
+  decoding:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">type</span> snippetCreateForm <span class="kw">struct</span> {
+    Title               <span class="kw">string</span> <span class="str">`form:"title"`</span>
+    Content             <span class="kw">string</span> <span class="str">`form:"content"`</span>
+    Expires             <span class="kw">int</span>    <span class="str">`form:"expires"`</span>
+    validator.Validator <span class="str">`form:"-"`</span>
+}
+
+<span class="com">// Declare a new empty instance of the snippetCreateForm struct.</span>
+<span class="kw">var</span> form snippetCreateForm
+
+<span class="com">// Call the Decode() method of the form decoder, passing in the current</span>
+<span class="com">// request and *a pointer* to our snippetCreateForm struct. This will</span>
+<span class="com">// essentially fill our struct with the relevant values from the HTML form.</span>
+<span class="com">// If there is a problem, we return a 400 Bad Request response to the client.</span>
+err = app.formDecoder.Decode(&amp;form, r.PostForm)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    app.clientError(w, http.StatusBadRequest)
+    <span class="kw">return</span>
+}</pre>
+</div>
+
+<p>The gain is that type conversion is handled for you: <code>"7"</code> lands in the <code>int</code> field
+  <code>Expires</code> without a <code>strconv.Atoi</code> in sight, and it scales to a form of any size.</p>
+
+<h4>But <code>Decode</code> has a trap</h4>
+<p><code>Decode()</code> requires a <em>non-nil pointer</em> as its destination. Pass anything else and it returns a
+  <code>form.InvalidDecoderError</code>. That is never the client's fault — it means the application passed the wrong
+  thing — so treating it as a 400 would hide a bug. The book's <code>decodePostForm()</code> helper checks for that one
+  error type and turns it into a panic, which chapter 6's <code>recoverPanic</code> middleware then handles:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/helpers.go</span><span class="lang">go</span></div>
+  <pre class="code"><span class="com">// Create a new decodePostForm() helper method. The second parameter here, dst,</span>
+<span class="com">// is the target destination that we want to decode the form data into.</span>
+<span class="kw">func</span> (app *application) decodePostForm(r *http.Request, dst <span class="kw">any</span>) <span class="kw">error</span> {
+    <span class="com">// Call ParseForm() on the request, in the same way that we did in our</span>
+    <span class="com">// createSnippetPost handler.</span>
+    err := r.ParseForm()
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> err
+    }
+
+    <span class="com">// Call Decode() on our decoder instance, passing the target destination as</span>
+    <span class="com">// the first parameter.</span>
+    err = app.formDecoder.Decode(dst, r.PostForm)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="com">// If we try to use an invalid target destination, the Decode() method</span>
+        <span class="com">// will return an error with the type *form.InvalidDecoderError. We use</span>
+        <span class="com">// errors.As() to check for this and raise a panic rather than returning</span>
+        <span class="com">// the error.</span>
+        <span class="kw">var</span> invalidDecoderError *form.InvalidDecoderError
+
+        <span class="kw">if</span> errors.As(err, &amp;invalidDecoderError) {
+            panic(err)
+        }
+
+        <span class="com">// For all other errors, we return them as normal.</span>
+        <span class="kw">return</span> err
+    }
+    <span class="kw">return</span> <span class="kw">nil</span>
+}</pre>
+</div>
+
+<p>And the final handler — four lines of preparation, four checks, one branch:</p>
+
+<div class="codeblock">
+  <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>File: cmd/web/handlers.go — the finished handler</span><span class="lang">go</span></div>
+  <pre class="code"><span class="kw">func</span> (app *application) snippetCreatePost(w http.ResponseWriter, r *http.Request) {
+    <span class="kw">var</span> form snippetCreateForm
+
+    err := app.decodePostForm(r, &amp;form)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        app.clientError(w, http.StatusBadRequest)
+        <span class="kw">return</span>
+    }
+
+    form.CheckField(validator.NotBlank(form.Title), <span class="str">"title"</span>, <span class="str">"This field cannot be blank"</span>)
+    form.CheckField(validator.MaxChars(form.Title, 100), <span class="str">"title"</span>, <span class="str">"This field cannot be more than 100 characters long"</span>)
+    form.CheckField(validator.NotBlank(form.Content), <span class="str">"content"</span>, <span class="str">"This field cannot be blank"</span>)
+    form.CheckField(validator.PermittedInt(form.Expires, 1, 7, 365), <span class="str">"expires"</span>, <span class="str">"This field must equal 1, 7 or 365"</span>)
+
+    <span class="kw">if</span> !form.Valid() {
+        data := app.newTemplateData(r)
+        data.Form = form
+        app.render(w, http.StatusUnprocessableEntity, <span class="str">"create.tmpl"</span>, data)
+        <span class="kw">return</span>
+    }
+
+    id, err := app.snippets.Insert(form.Title, form.Content, form.Expires)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        app.serverError(w, err)
+        <span class="kw">return</span>
+    }
+
+    http.Redirect(w, r, fmt.Sprintf(<span class="str">"/snippet/view/%d"</span>, id), http.StatusSeeOther)
+}</pre>
+</div>
+
+<p>That pattern — decode into a form struct, run the checks, re-render on failure, insert and redirect on
+  success — is what the signup and login forms later in the book reuse verbatim.</p>
+
+<h2 class="sec" id="ch8-demo">Chapter 8, running live</h2>
+<p>The demo serves the real <code>create.tmpl</code> from <code>web/snippetbox/ui/html/pages/</code>, through the real
+  render helper, with the real <code>Validator</code> and decoder.</p>
+
+<div class="demo">
+  <div class="demo__head">
+    <h3>Chapter 8 controls</h3>
+    <span class="live"><i></i><span id="ch8State">connecting…</span></span>
+    <a class="btn" href="http://localhost:3000/forms" target="_blank" rel="noopener" style="margin-left:auto">Open the pipeline page ↗</a>
+  </div>
+  <div class="demo__body">
+    <p style="margin:0 0 10px"><strong>8.2–8.4 Post-Redirect-Get</strong>
+      <span style="color:#7b8b93;font-size:14px">— the real handler, the real templates</span></p>
+    <div class="row">
+      <button class="btn btn--green" data-ch8="get">GET /newsnippet/create (200)</button>
+      <button class="btn" data-ch8="valid">POST valid values (303)</button>
+      <button class="btn" data-ch8="blank">POST blank title (422)</button>
+      <button class="btn" data-ch8="long">POST 120-character title (422)</button>
+      <button class="btn" data-ch8="atoi">POST expires=abc (400)</button>
+    </div>
+    <div class="resp" data-ch8-slot="pgr" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>8.5 Runes versus bytes</strong>
+      <span style="color:#7b8b93;font-size:14px">— <code>utf8.RuneCountInString</code> is not <code>len</code></span></p>
+    <div class="row">
+      <button class="btn" data-ch8="rune">Title of 100 Zoës (300 bytes)</button>
+      <button class="btn" data-ch8="bytelimit">The same title with a byte limit (422)</button>
+    </div>
+    <div class="resp" data-ch8-slot="rune" hidden></div>
+
+    <hr class="rule" style="margin:22px 0">
+
+    <p style="margin:0 0 10px"><strong>8.6 The decoder</strong>
+      <span style="color:#7b8b93;font-size:14px">— struct tags, type conversion, <code>InvalidDecoderError</code></span></p>
+    <div class="row">
+      <button class="btn" data-ch8="decode">Decode a form into snippetCreateForm</button>
+      <button class="btn" data-ch8="invalid">Decode into a non-pointer (panic)</button>
+      <button class="btn" data-ch8="multipart">multipart/form-data body</button>
+    </div>
+    <div class="resp" data-ch8-slot="decode" hidden></div>
+  </div>
+  <div class="demo__foot">
+    <span>Pages: <code>/forms</code> · <code>/newsnippet/create</code> · <code>/newsnippet</code></span>
+    <a href="http://localhost:3000/newsnippet/create" target="_blank" rel="noopener">The real form</a>
+    <a href="http://localhost:3000/forms" target="_blank" rel="noopener">Stage-by-stage pipeline</a>
+  </div>
+</div>
+
+<h2 class="sec" id="ch8-takeaways">What chapter 8 leaves you with</h2>
+<table>
+  <thead><tr><th>Concept</th><th>Where it is demonstrated live</th></tr></thead>
+  <tbody>
+    <tr><td><code>r.ParseForm()</code> then <code>r.PostForm.Get()</code></td><td>every POST button; the pipeline page prints <code>r.PostForm</code></td></tr>
+    <tr><td>Values are always strings — convert, and 400 on failure</td><td><code>expires=abc</code> returns 400</td></tr>
+    <tr><td><code>r.Form</code> (body + query) versus <code>r.PostForm</code> (body only)</td><td>the pipeline page's raw request dump</td></tr>
+    <tr><td>Multi-value fields need the map, not <code>Get()</code></td><td>the raw request dump with three <code>tags</code></td></tr>
+    <tr><td>10MB default limit, <code>http.MaxBytesReader</code> to lower it</td><td>the raw request dump's limit box</td></tr>
+    <tr><td>Validation with per-field messages, first rule wins</td><td>blank and over-long titles</td></tr>
+    <tr><td>422 <em>Unprocessable Entity</em> for bad values, 400 for bad input</td><td>422 vs 400 buttons, side by side</td></tr>
+    <tr><td>Re-populating with <code>value=</code>, textarea contents and <code>checked</code></td><td>the 422 body keeps the title, content and expiry</td></tr>
+    <tr><td><code>utf8.RuneCountInString</code>, not <code>len()</code></td><td>100 Zoës: 300 bytes, 100 characters</td></tr>
+    <tr><td>Embedding to share <code>Validator</code> across forms</td><td><code>form.CheckField(...)</code> on the form struct</td></tr>
+    <tr><td>Decoding with struct tags and automatic int conversion</td><td>the decoder buttons</td></tr>
+    <tr><td><code>InvalidDecoderError</code> → panic → <code>recoverPanic</code> → 500</td><td>the non-pointer button</td></tr>
+    <tr><td>303 See Other after a successful POST</td><td>the valid-values button</td></tr>
+  </tbody>
+</table>
+
+<p>Chapter 9, <em>Stateful HTTP</em>, starts on page 225 — where the same application gains a session manager,
+  flash messages, and user signup, login and logout. The form-processing pattern from this chapter is its
+  foundation: every one of those forms is decoded into a struct, checked with <code>CheckField</code>, and either
+  re-rendered with 422 or accepted.</p>

@@ -25,6 +25,7 @@ const chapter4 = require('./snippetbox/chapter4');
 const chapter5 = require('./snippetbox/chapter5');
 const chapter6 = require('./snippetbox/chapter6');
 const chapter7 = require('./snippetbox/chapter7');
+const chapter8 = require('./snippetbox/chapter8');
 const models = require('./snippetbox/models');
 
 // Chapter 3.1: configuration comes from command-line flags, parsed before
@@ -419,6 +420,8 @@ function handler(req, res) {
   if (chapter6.handle(req, res, url, app)) return;
   // Chapter 7: the same application on httprouter, with clean URLs.
   if (chapter7.handle(req, res, url, app, db)) return;
+  // Chapter 8: the create form, Post-Redirect-Get and the form pipeline.
+  if (chapter8.handle(req, res, url, app, db)) return;
   if (chapter2.handle(req, res, url, config, app)) return;
 
   // 1. The home route.

@@ -221,6 +221,10 @@ class Application {
     // switch both live on the same object.
     this.config = config;
 
+    // 8.6: one decoder for the whole application, created in main() and
+    // injected here — the same shape as templateCache and the snippet model.
+    this.formDecoder = require('./forms').NewDecoder();
+
     // The deliberate error from page 77, switchable at runtime.
     this.brokenTemplate = false;
   }

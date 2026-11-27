@@ -1,4 +1,4 @@
-/* Page script for chapter-one.html — the chapters 1-7 summary.
+/* Page script for chapter-one.html — the chapters 1-8 summary.
  *
  * Kept as a real .js file (rather than a Python string) so the escaping is
  * unambiguous; build_chapter1.py inlines it into the generated page. */
@@ -623,6 +623,173 @@
     });
   });
 
+
+  /* ------------------------------------------------------------ chapter 8 */
+
+  var CH8_SLOT = { get: 'pgr', valid: 'pgr', blank: 'pgr', long: 'pgr', atoi: 'pgr',
+                   rune: 'rune', bytelimit: 'rune',
+                   decode: 'decode', invalid: 'decode', multipart: 'decode' };
+
+  function postForm(path, body) {
+    return fetch(DEMO + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body,
+      cache: 'no-store',
+      redirect: 'manual'
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        return { status: res.status, text: res.statusText, body: text, res: res };
+      });
+    });
+  }
+
+  function formErrors(html) {
+    var out = [];
+    var re = /<label class='error'>([\s\S]*?)<\/label>/g;
+    var m;
+    while ((m = re.exec(html)) !== null) out.push(m[1].trim());
+    return out;
+  }
+
+  function repopulated(html) {
+    var title = /name='title' value='([^']*)'/.exec(html);
+    var content = /<textarea name='content'>([\s\S]*?)<\/textarea>/.exec(html);
+    var checked = /name='expires' value='(\d+)' checked/.exec(html);
+    return {
+      title: title ? title[1] : null,
+      content: content ? content[1] : null,
+      expires: checked ? checked[1] : null
+    };
+  }
+
+  function ch8Post(slot, key, body, describe, done) {
+    postForm('/newsnippet/create', body).then(function (r) {
+      var head = ['POST /newsnippet/create', '', 'HTTP/1.1 ' + r.status + ' ' + r.text];
+      var loc = r.res.headers.get('location');
+      if (loc) head.push('Location: ' + loc);
+      head.push('');
+      var lines = (describe || []).slice();
+      if (r.status === 303) {
+        lines.push('The snippet was inserted and the response is a redirect.');
+        lines.push('The browser will GET ' + loc + ' next — that is the');
+        lines.push('"redirect" half of Post-Redirect-Get. The POST response');
+        lines.push('itself has no body, so a refresh cannot resubmit.');
+      } else if (r.status === 422) {
+        var errs = formErrors(r.body);
+        var re = repopulated(r.body);
+        lines.push('Re-rendered create.tmpl with 422 Unprocessable Entity.');
+        lines.push('');
+        lines.push('field errors shown:');
+        if (!errs.length) lines.push('  (none)');
+        errs.forEach(function (e) { lines.push('  "label class=\'error\'" -> ' + e); });
+        lines.push('');
+        lines.push('re-populated from the submission:');
+        lines.push('  value=\'' + (re.title === null ? '(absent)' : re.title) + '\'');
+        lines.push('  <textarea> ' + JSON.stringify(re.content === null ? '' : re.content));
+        lines.push('  checked: expires=' + (re.expires === null ? '(none)' : re.expires));
+      } else if (r.status === 400) {
+        lines.push('400 Bad Request. ParseForm() or Decode() failed, so the');
+        lines.push('handler returned before any validation ran.');
+      }
+      message(slot, r.status, labelFor(r.status), head.join('\n') + '\n' + lines.join('\n'));
+    }).catch(failOn(slot)).then(done);
+  }
+
+  function labelFor(status) {
+    return { 200: 'OK', 303: 'See Other', 400: 'Bad Request',
+             422: 'Unprocessable Entity', 500: 'Internal Server Error' }[status] || 'response';
+  }
+
+  function ch8Api(slot, kind, payload, note, done) {
+    fetch(DEMO + '/api/forms/demo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ kind: kind }, payload || {})),
+      cache: 'no-store'
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      message(slot, d.status, d.label, (note ? note + '\n\n' : '') + d.text);
+    }).catch(failOn(slot)).then(done);
+  }
+
+  document.querySelectorAll('[data-ch8]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key = btn.getAttribute('data-ch8');
+      var slot = document.querySelector('[data-ch8-slot="' + (CH8_SLOT[key] || 'pgr') + '"]');
+      btn.disabled = true;
+      var done = function () { btn.disabled = false; };
+
+      if (key === 'get') {
+        fetch(DEMO + '/newsnippet/create', { cache: 'no-store' }).then(function (r) {
+          return r.text().then(function (body) { return [r, body]; });
+        }).then(function (pair) {
+          var re = repopulated(pair[1]);
+          message(slot, pair[0].status, 'the blank form',
+            'GET /newsnippet/create\n\n' +
+            'status: ' + pair[0].status + '\n' +
+            'template: create.tmpl\n\n' +
+            'expires checked by default: ' + (re.expires === null ? '(none)' : re.expires) + '\n' +
+            'why: snippetCreate() sets data.Form = snippetCreateForm{Expires: 365}\n' +
+            '     before rendering, so {{if (eq .Form.Expires 365)}} fires.\n\n' +
+            'title value: ' + JSON.stringify(re.title || '') + '   (empty)\n' +
+            'errors shown: ' + (formErrors(pair[1]).length || 0));
+        }).catch(failOn(slot)).then(done);
+        return;
+      }
+
+      if (key === 'valid') {
+        ch8Post(slot, key, 'title=From+time+to+time&content=The+clouds+give+rest&expires=7',
+          ['title=From time to time', 'content=The clouds give rest', 'expires=7', ''], done);
+        return;
+      }
+      if (key === 'blank') {
+        ch8Post(slot, key, 'title=&content=Blown+from+the+west&expires=365',
+          ['title=(blank)', 'content=Blown from the west', 'expires=365', '',
+           'TrimSpace(title) == "" so the first rule fires.'], done);
+        return;
+      }
+      if (key === 'long') {
+        ch8Post(slot, key, 'title=' + new Array(121).join('a') +
+          '&content=Blown+from+the+west&expires=365',
+          ['title=' + new Array(121).join('a').slice(0, 24) + '\u2026 (120 characters)',
+           'content=Blown from the west', 'expires=365', '',
+           'utf8.RuneCountInString(title) > 100, so the length rule fires.',
+           'AddFieldError() refuses to overwrite, but nothing was added for',
+           'blankness anyway: TrimSpace of 120 a\'s is not empty.'], done);
+        return;
+      }
+      if (key === 'atoi') {
+        ch8Post(slot, key, 'title=Hi&content=There&expires=abc',
+          ['title=Hi', 'content=There', 'expires=abc', '',
+           'The decoder cannot turn "abc" into the int field, so it returns',
+           'a DecodeError before validation — a client error, so 400.'], done);
+        return;
+      }
+
+      if (key === 'rune') {
+        ch8Api(slot, 'runes', { text: new Array(101).join('\u00eb') }, null, done);
+        return;
+      }
+      if (key === 'bytelimit') {
+        ch8Api(slot, 'runes', { text: new Array(101).join('\u00eb'), rule: 'bytes' },
+          'The same title, with the rule rewritten as a byte count:', done);
+        return;
+      }
+      if (key === 'decode') {
+        ch8Api(slot, 'decode', { title: 'O snail', content: 'Climb Mount Fuji', expires: '7' }, null, done);
+        return;
+      }
+      if (key === 'invalid') {
+        ch8Api(slot, 'invalid', null, null, done);
+        return;
+      }
+      if (key === 'multipart') {
+        ch8Api(slot, 'multipart', null, null, done);
+        return;
+      }
+    });
+  });
+
   /* --------------------------------------------------------- live badges */
 
   function badge(id) {
@@ -643,6 +810,7 @@
   badge('ch5State');
   badge('ch6State');
   badge('ch7State');
+  badge('ch8State');
 
   /* ------------------------------------------------------- replica form */
 

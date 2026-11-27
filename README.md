@@ -1,13 +1,13 @@
-# golang — Go books + a chapters 1–7 study page
+# golang — Go books + a chapters 1–8 study page
 
-Reference PDFs for Go, plus a self-contained HTML summary of **chapters 1–7 of _Let's Go_**
+Reference PDFs for Go, plus a self-contained HTML summary of **chapters 1–8 of _Let's Go_**
 (Alex Edwards, 2nd ed.) and a live Snippetbox demo server.
 
 ## What's here
 
 | Path | What it is |
 | --- | --- |
-| `chapter-one.html` | The deliverable: chapters 1–7 summary, with all 31 figures and the code samples **embedded** (open it directly, no server needed) |
+| `chapter-one.html` | The deliverable: chapters 1–8 summary, with all 39 figures and the code samples **embedded** (open it directly, no server needed) |
 | `content/chapter1.html` | Chapter 1 text fragment (Introduction, Prerequisites) |
 | `content/chapter2.html` | Chapter 2 text fragment (Foundations, sections 2.1–2.9) |
 | `content/chapter3.html` | Chapter 3 text fragment (Configuration and error handling, 3.1–3.5 — no figures) |
@@ -15,16 +15,18 @@ Reference PDFs for Go, plus a self-contained HTML summary of **chapters 1–7 of
 | `content/chapter5.html` | Chapter 5 text fragment (Dynamic HTML templates, 5.1–5.6) |
 | `content/chapter6.html` | Chapter 6 text fragment (Middleware, 6.1–6.5) |
 | `content/chapter7.html` | Chapter 7 text fragment (Advanced routing, 7.1–7.2) |
+| `content/chapter8.html` | Chapter 8 text fragment (Processing forms, 8.1–8.6) |
 | `content/page.js` | The summary page's script (demo buttons for every chapter, live badges, Go highlighting) |
 | `build_chapter1.py` | Rebuilds `chapter-one.html` from the PDF and the chapter fragments |
 | `web/server.js` | Dependency-free Node server: the book's routes live, plus the pages below |
-| `web/snippetbox/` | The book's actual project tree: `ui/html/*.tmpl`, `ui/static/{css,img,js}`, plus `app.js` (flags, leveled loggers, app struct), `chapter3.js` (config/logging demo pages), `models.js` (an in-memory `snippets` table with the chapter's `SnippetModel`), `chapter4.js` (the SQL playground), `template.js` (a working `html/template`), `chapter5.js` (the template demo pages), `middleware.js` (the chapter-6 chain, real and traced), `chapter6.js`, `httprouter.js` (a working httprouter) and `chapter7.js` |
+| `web/snippetbox/` | The book's actual project tree: `ui/html/*.tmpl`, `ui/static/{css,img,js}`, plus `app.js` (flags, leveled loggers, app struct), `chapter3.js` (config/logging demo pages), `models.js` (an in-memory `snippets` table with the chapter's `SnippetModel`), `chapter4.js` (the SQL playground), `template.js` (a working `html/template`), `chapter5.js` (the template demo pages), `middleware.js` (the chapter-6 chain, real and traced), `chapter6.js`, `httprouter.js` (a working httprouter), `chapter7.js`, `validator.js` and `forms.js` (the chapter-8 `Validator` and the go-playground decoder, with `ParseForm`/`MaxBytesReader` semantics) and `chapter8.js`/`chapter8ui.js` (the create form, Post-Redirect-Get and the form pipeline page) |
 | `assets/` | The chapter-1 figures (`snippetbox-app.png`, `book-cover.png`) |
 | `assets/ch2/` | The 14 chapter-2 figures, cropped from pp. 13–56 at 150 dpi |
 | `assets/ch4/` | The 5 chapter-4 figures, cropped from pp. 92–120 at 150 dpi |
 | `assets/ch5/` | The 9 chapter-5 figures, cropped from pp. 128–160 at 150 dpi |
 | `assets/ch6/` | The chapter-6 figure (Firefox CSP console), p. 170 |
 | `assets/ch7/` | The chapter-7 figure (a clean URL), p. 188 |
+| `assets/ch8/` | The 8 chapter-8 figures, cropped from pp. 193–213 at 150 dpi |
 
 ## Run the live demo
 
@@ -34,7 +36,7 @@ node web/server.js          # http://localhost:3000/console
 
 | URL | |
 | --- | --- |
-| `/summary` | The chapters 1–7 HTML summary (`chapter-one.html`) |
+| `/summary` | The chapters 1–8 HTML summary (`chapter-one.html`) |
 | `/logs` | Live `INFO`/`ERROR` stream from the custom loggers (chapter 3.2) |
 | `/config` | The command-line flags this server parsed (chapter 3.1) |
 | `/break` | Toggle the deliberate missing-template error (chapters 3.3/3.4) |
@@ -62,6 +64,9 @@ node web/server.js          # http://localhost:3000/console
 | `/middleware/alice` | `alice.New(...).Then(mux)` and named chains (chapter 6.5) |
 | `/router` | The route table, plus a probe that asks the real matcher (chapter 7) |
 | `/clean`, `/clean/snippet/view/1` | The same app on httprouter: clean URLs, 405 + `Allow`, custom 404 (chapter 7.2) |
+| `/forms` | The form pipeline: `ParseForm` → `Decode` → `CheckField` ×4 → `Valid()` → insert/redirect, plus the raw `r.Form` vs `r.PostForm` dump (chapter 8) |
+| `/newsnippet/create` | The real `create.tmpl`: `GET` renders it with `expires=365`; `POST` inserts and 303s, or re-renders with 422 (chapters 8.1–8.6) |
+| `/newsnippet`, `/newsnippet/view/1` | The templated home and view pages at their chapter-8 URLs, nav including *Create snippet* |
 
 ### Command-line flags
 
@@ -88,5 +93,5 @@ to run if an image placeholder is unresolved or unused.
 Prerequisites), chapter 2 on pp. 11–61 (Foundations, 2.1–2.9), chapter 3 on pp. 62–85
 (Configuration and error handling, 3.1–3.5; this chapter contains no figures) and chapter 4
 on pp. 86–126 (Database-driven responses, 4.1–4.9) and chapter 5 on pp. 127–161 (Dynamic HTML
-templates, 5.1–5.6) chapter 6 on pp. 162–179 (Middleware, 6.1–6.5) and chapter 7 on pp. 180–192 (Advanced routing, 7.1–7.2). The summary
+templates, 5.1–5.6), chapter 6 on pp. 162–179 (Middleware, 6.1–6.5), chapter 7 on pp. 180–192 (Advanced routing, 7.1–7.2) and chapter 8 on pp. 193–224 (Processing forms, 8.1–8.6). The summary
 paraphrases the text; the figures and code samples are embedded for study.

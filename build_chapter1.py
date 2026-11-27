@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build chapter-one.html — a single self-contained page covering
-chapters 1-7 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
+chapters 1-8 of "Let's Go" by Alex Edwards (2nd ed., v2.20.0).
 
 Sources (all extracted from Let's Go [Alex Edwards].pdf in this directory)
 
@@ -70,6 +70,14 @@ IMAGES = {
     "ch5-09": ROOT / "assets" / "ch5" / "09-view-humandate.jpg",
     "ch6-01": ROOT / "assets" / "ch6" / "01-csp-console.jpg",
     "ch7-01": ROOT / "assets" / "ch7" / "01-snippet-view-clean-url.jpg",
+    "ch8-01": ROOT / "assets" / "ch8" / "01-form-wireframe.jpg",
+    "ch8-02": ROOT / "assets" / "ch8" / "02-blank-form.jpg",
+    "ch8-03": ROOT / "assets" / "ch8" / "03-form-filled.jpg",
+    "ch8-04": ROOT / "assets" / "ch8" / "04-created-snippet.jpg",
+    "ch8-05": ROOT / "assets" / "ch8" / "05-too-long-title.jpg",
+    "ch8-06": ROOT / "assets" / "ch8" / "06-errors-dump.jpg",
+    "ch8-07": ROOT / "assets" / "ch8" / "07-blank-title.jpg",
+    "ch8-08": ROOT / "assets" / "ch8" / "08-validation-error.jpg",
 }
 
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
@@ -132,6 +140,14 @@ def verify_pages() -> None:
         180: "Advanced routing",
         182: "Choosing a router",
         184: "Clean URLs and method-based routing",
+        193: "Processing forms",
+        195: "Setting up a HTML form",
+        198: "Parsing form data",
+        204: "Validating form data",
+        208: "Displaying errors and repopulating",
+        214: "Creating validation helpers",
+        219: "Automatic form parsing",
+        224: "app.decodePostForm(r, &form)",
     }
     for pno, needle in checks.items():
         text = doc[pno - 1].get_text()
@@ -265,7 +281,7 @@ HERO = f"""
 <div class="hero">
   <div class="wrap">
     <p class="kicker">Let’s Go · Alex Edwards · 2nd edition, v2.20.0</p>
-    <h1>Chapters 1–7 — <span>Introduction</span><br>&amp; Foundations to Routing</h1>
+    <h1>Chapters 1–8 — <span>Introduction</span><br>&amp; Foundations to Forms</h1>
     <p>Build Snippetbox: a web app for pasting and sharing snippets of text. Chapter one sets the destination and
        the toolchain; chapter two builds the whole foundations of the app — modules, routing, headers, query
        strings, project structure, templates and static files. Chapter three adds nothing visible and makes
@@ -273,12 +289,14 @@ HERO = f"""
        gives it a memory — a MySQL connection pool, a models package, and every shape of SQL call — and chapter
        five gives it a face — templates, actions, a cache, and a render that fails safely — and chapter six wraps
        the whole thing in middleware: security headers, request logging and panic recovery. Chapter seven swaps the
-       router out for method-based routing and clean URLs.</p>
+       router out for method-based routing and clean URLs, and chapter eight finally lets a user type something: an
+       HTML form, parsed and validated and re-displayed when it is wrong, then a redirect so a refresh cannot submit
+       it twice.</p>
     <div class="meta">
-      <span>186 pages of source (pp. 6–192)</span>
-      <span>31 figures, all embedded</span>
+      <span>219 pages of source (pp. 6–224)</span>
+      <span>all 40 images embedded</span>
       <span>Live demo on port {DEMO_PORT}</span>
-      <span>Reading time ≈ 85 min</span>
+      <span>Reading time ≈ 100 min</span>
     </div>
   </div>
 </div>
@@ -364,6 +382,17 @@ TOC = """
       <li><a href="#ch7-demo">Chapter 7 live</a></li>
       <li><a href="#ch7-takeaways">Takeaways</a></li>
     </ol>
+    <p class="part">Chapter 8 · Forms</p>
+    <ol>
+      <li><a href="#s81">8.1 The HTML form</a></li>
+      <li><a href="#s82">8.2 Parsing form data</a></li>
+      <li><a href="#s83">8.3 Validation</a></li>
+      <li><a href="#s84">8.4 Errors &amp; repopulation</a></li>
+      <li><a href="#s85">8.5 Validator package</a></li>
+      <li><a href="#s86">8.6 Automatic decoding</a></li>
+      <li><a href="#ch8-demo">Chapter 8 live</a></li>
+      <li><a href="#ch8-takeaways">Takeaways</a></li>
+    </ol>
   </nav>
 """
 
@@ -380,6 +409,7 @@ def build() -> str:
     ch5 = (ROOT / "content" / "chapter5.html").read_text(encoding="utf-8")
     ch6 = (ROOT / "content" / "chapter6.html").read_text(encoding="utf-8")
     ch7 = (ROOT / "content" / "chapter7.html").read_text(encoding="utf-8")
+    ch8 = (ROOT / "content" / "chapter8.html").read_text(encoding="utf-8")
 
     # chapter 1's hero/toc listed a "Where it goes next" section; keep its content
     # but retitle it so it reads as a bridge into chapter 2.
@@ -409,6 +439,8 @@ def build() -> str:
         + ch6.strip()
         + '\n<hr class="rule" id="chapter7">\n'
         + ch7.strip()
+        + '\n<hr class="rule" id="chapter8">\n'
+        + ch8.strip()
         + "\n</article></div>"
     )
 
@@ -417,7 +449,7 @@ def build() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Let&#39;s Go — chapters 1–7 summary</title>
+<title>Let&#39;s Go — chapters 1–8 summary</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -425,11 +457,11 @@ def build() -> str:
 {body}
 <footer>
   <div class="wrap">
-    Summary of chapters 1–7 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
+    Summary of chapters 1–8 of <em>Let’s Go: Learn to build professional web applications with Go</em> by
     Alex Edwards (2nd edition, v2.20.0), generated from <code>Let’s Go [Alex Edwards].pdf</code> in this repository:
     pages 6–10 for chapter 1, 11–61 for chapter 2, 62–85 for chapter 3, 86–126 for chapter 4, 127–161 for
-    chapter 5, 162–179 for chapter 6 and 180–192 for chapter 7. All 31 figures — chapter 3 has none — were extracted
-    with PyMuPDF and inlined as base64, so this file needs no network access.<br>
+    chapter 5, 162–179 for chapter 6, 180–192 for chapter 7 and 193–224 for chapter 8. All 40 images — the book cover,
+    the app mock-up, and 38 figures (chapter 3 has none) — were extracted with PyMuPDF and inlined as base64, so this file needs no network access.<br>
     Live demo: <code>web/snippetbox/</code> — the book’s own templates, static directory, flags and loggers, served by
     <code>web/server.js</code> on port {DEMO_PORT}. Rebuild this page with
     <code>python3 build_chapter1.py</code>.

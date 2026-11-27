@@ -351,6 +351,15 @@ function evalFieldPath(base, pathStr, ctx, node) {
       walked = walked === null ? part : walked + '.' + part;
       continue;
     }
+    // Map semantics. Every exported struct field starts with a capital, so a
+    // lowercase name that is absent can only be a missing map key — and Go
+    // answers a missing map key with the zero value instead of an error. That
+    // is what makes {{with .Form.FieldErrors.title}} safe when FieldErrors is
+    // nil or holds no entry for "title".
+    if (typeof cur === 'object' && cur !== null && /^[a-z]/.test(part)) {
+      cur = undefined;
+      continue;
+    }
     throw new TemplateError(ctx.tmpl, node.line, node.column,
       `can't evaluate field ${part} in type ${goTypeName(cur)}`);
   }
